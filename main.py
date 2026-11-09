@@ -1145,18 +1145,11 @@ def start_ping_keeper():
     logger.info(f"Ping keeper 시작됨 (5분 간격 | 핑 URL: {_get_ping_url() or '미설정'})")
 
 # ============ STARTUP (runs on import for gunicorn) ============
-# 포트 인식(Render port scan)을 방해하지 않도록, HTTP 서버가 먼저 뜬 뒤
-# 5초 후에 디스코드 봇/핑 루프를 백그라운드로 시작한다.
-def _delayed_startup(delay: float = 5.0):
-    try:
-        time.sleep(delay)
-        start_bot()
-        start_ping_keeper()
-    except Exception as e:
-        logger.error(f"[STARTUP] 지연 초기화 오류: {e}")
+# Start bot
+start_bot()
 
-threading.Thread(target=_delayed_startup, daemon=True, name='apex-startup').start()
-logger.info("[STARTUP] Flask 준비 완료 - 봇은 5초 뒤 백그라운드로 시작합니다")
+# Start ping keeper
+start_ping_keeper()
 
 # ============ MAIN ============
 if __name__ == '__main__':
