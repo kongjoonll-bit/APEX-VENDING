@@ -1135,6 +1135,7 @@ start_ping_keeper()
 
 # ============ MAIN ============
 if __name__ == '__main__':
-    # Run Flask app
+    # 로컬 실행용 (Render는 gunicorn으로 실행)
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    logger.info(f"[START] Flask listening on 0.0.0.0:{port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
