@@ -22,9 +22,9 @@ DEFAULT_PRODUCTS = [
     ('배구전설쿠키', 3000, '배구전설을 플레이한적이 있는 계정의 쿠키', '게임쿠키'),
     ('입양겜패쿠키', 3000, '입양하세요의 게임패스가 있는 계정의 쿠키', '게임패스쿠키'),
     ('머더미스테리 겜패쿠키', 3000, '머더 미스테리 게임패스가 있는 계정의 쿠키', '게임패스쿠키'),
-    ('1만로벅이상사용 쿠키', 1500, '10000로벅 이상 사용한 계정의 쿠키', '로벅쿠키'),
-    ('3만로벅이상사용 쿠키', 4000, '30000로벅 이상 사용한 계정의 쿠키', '로벅쿠키'),
-    ('5만로벅이상사용 쿠키', 6000, '50000로벅 이상 사용한 계정의 쿠키 (레전드쿠키일 확률 가장높음)', '로벅쿠키'),
+    ('1만로벅이상사용 쿠키', 1500, '10000로벅 이상 사용한 계정의 쿠키', '로벅스사용쿠키'),
+    ('3만로벅이상사용 쿠키', 4000, '30000로벅 이상 사용한 계정의 쿠키', '로벅스사용쿠키'),
+    ('5만로벅이상사용 쿠키', 6000, '50000로벅 이상 사용한 계정의 쿠키 (레전드쿠키일 확률 가장높음)', '로벅스사용쿠키'),
     ('50로벅 이상 쿠키', 2500, '50로벅 이상 있는계정 쿠키', '로벅쿠키'),
     ('100로벅 이상 쿠키', 3500, '100로벅 이상 있는계정 쿠키', '로벅쿠키'),
     ('200로벅 이상 쿠키', 7000, '200로벅 이상 있는계정 쿠키', '로벅쿠키'),
@@ -283,6 +283,16 @@ def seed_default_products(force=False):
                     "UPDATE products SET category=? WHERE name=? AND (category IS NULL OR TRIM(category)='')",
                     (category, name)
                 )
+
+        # 카테고리 정정 마이그레이션(v2): 1만/3만/5만 → '로벅스사용쿠키' (1회)
+        c.execute("SELECT value FROM settings WHERE key='category_migration_v2'")
+        if not c.fetchone():
+            for _n in ('1만로벅이상사용 쿠키', '3만로벅이상사용 쿠키', '5만로벅이상사용 쿠키'):
+                c.execute(
+                    "UPDATE products SET category='로벅스사용쿠키' WHERE name=? AND (category IS NULL OR TRIM(category) IN ('', '로벅쿠키'))",
+                    (_n,)
+                )
+            c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('category_migration_v2', '1')")
 
         c.execute("SELECT value FROM settings WHERE key='default_products_seeded'")
         row = c.fetchone()
