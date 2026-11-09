@@ -592,7 +592,9 @@ class VendingBot(commands.Bot):
         첫 핑은 60초 뒤에 보내고 타임아웃을 30초로 넉넉히 준다.
         """
         await asyncio.sleep(60)
+        ping_fails = 0
         while True:
+            sleep_for = 300
             try:
                 # 핑 URL: 설정값 우선, 없으면 Render 외부 URL(RENDER_EXTERNAL_URL) 자동 사용
                 ping_url = db.get_setting('dashboard_url', '') or os.environ.get('RENDER_EXTERNAL_URL', '')
@@ -608,19 +610,33 @@ class VendingBot(commands.Bot):
                             resp = _req.get(url + '/ping', timeout=10)
                             return resp.status_code
                         except Exception as e:
-                            logger.warning(f"[PING] error: {e}")
-                            return None
-                    
+                            return e
+
                     status = await self.loop.run_in_executor(None, _do_ping)
-                    if status:
+                    if isinstance(status, int):
                         logger.info(f"[PING] {ping_url} -> {status} (5분 후 재전송)")
-                
+                        ping_fails = 0
+                    else:
+                        # 자기 공개 URL 접속 실패 → 로그 폭주 방지 (3회까지만 경고, 이후 30분 간격)
+                        ping_fails += 1
+                        if ping_fails < 3:
+                            logger.warning(f"[PING] error: {status}")
+                        elif ping_fails == 3:
+                            logger.warning(
+                                "[PING] 자기 URL 접속이 계속 실패합니다(렌더 라우팅 문제 가능). "
+                                "자동 핑을 30분 간격으로 줄입니다. "
+                                f"(마지막 오류: {status})"
+                            )
+                            sleep_for = 1800
+                        else:
+                            sleep_for = 1800
+
                 # 자판기 새로고침 (재고/상품 상태 최신화)
                 await self.refresh_vending_machines()
                 logger.info("[PING] Vending machines refreshed")
             except Exception as e:
                 logger.error(f"[PING] Error: {e}")
-            await asyncio.sleep(300)  # 5분
+            await asyncio.sleep(sleep_for)  # 정상 5분 / 연속 실패 시 30분
 
     async def charge_reminder_loop(self):
         """30초마다 확인 - 충전 신청 후 3분이 지나도 자동 충전이 안 된 요청에 리마인더 DM 발송"""

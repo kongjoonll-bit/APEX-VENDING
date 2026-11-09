@@ -110,20 +110,38 @@ def ping_keeper():
     """5분마다 서비스에 핑 전송 (Render 무료 플랜 슬립 방지)
 
     부팅 직후에는 워커가 아직 준비되지 않아 self-ping 이 타임아웃되기 쉬우므로
-    첫 핑은 60초 뒤에 보내고, 타임아웃도 넉넉하게(30초) 준다.
+    첫 핑은 60초 뒤에 보낸다.
+    Render 무료 플랜에서 자기 공개 URL 로 가는 요청이 막히면 계속 실패하므로,
+    3회 연속 실패하면 로그를 줄이고 30분 간격으로만 재시도한다.
     """
     time.sleep(60)
+    fails = 0
     while True:
+        sleep_for = 300
         try:
             url = _get_ping_url()
             if url:
                 resp = requests.get(url + '/ping', timeout=10)
                 logger.info(f"[PING] {url}/ping -> {resp.status_code} (5분 후 재전송)")
+                fails = 0
             else:
                 logger.warning("[PING] 핑 URL 미설정! 대시보드 설정에서 '대시보드 URL'을 저장하거나 RENDER_EXTERNAL_URL 환경변수가 필요합니다.")
+                fails = 0
         except Exception as e:
-            logger.warning(f"[PING] error: {e}")
-        time.sleep(300)  # 5분
+            fails += 1
+            if fails < 3:
+                logger.warning(f"[PING] error: {e}")
+            elif fails == 3:
+                logger.warning(
+                    "[PING] 자기 URL 접속이 계속 실패합니다(렌더 라우팅 문제 가능). "
+                    "자동 핑을 30분 간격으로 줄입니다. "
+                    "슬립 방지는 UptimeRobot 같은 외부 모니터 사용을 권장합니다. "
+                    f"(마지막 오류: {e})"
+                )
+                sleep_for = 1800
+            else:
+                sleep_for = 1800
+        time.sleep(sleep_for)  # 정상 5분 / 연속 실패 시 30분
 
 # ============ SAFE DISCORD SENDERS (로그 전송 실패 시 반드시 기록) ============
 def send_to_discord_channel(setting_key, embed=None, content=None):
@@ -1135,7 +1153,9 @@ start_ping_keeper()
 
 # ============ MAIN ============
 if __name__ == '__main__':
-    # 로컬 실행용 (Render는 gunicorn으로 실행)
-    port = int(os.environ.get('PORT', 5000))
+    # 로컬 실행용 (Render는 gunicorn으로 실행하는 것을 권장)
+    # Render 에서는 PORT 가 주입되지만, 수동 실행/환경 누락 시에도 10000 으로 바인딩한다.
+    _default_port = 10000 if os.environ.get('RENDER') else 5000
+    port = int(os.environ.get('PORT') or _default_port)
     logger.info(f"[START] Flask listening on 0.0.0.0:{port}")
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
