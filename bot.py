@@ -1185,25 +1185,59 @@ class VendingBot(commands.Bot):
             logger.info("[VENDING] Vending machines refreshed")
     
     async def send_stock_notice(self, product, key_count):
-        """재고(키) 입고 시 입고 채널에 공지 전송"""
+        """재고(키) 입고 시 입고 채널에 카드 이미지 + 임베드 전송"""
         stock_channel_id = db.get_setting('stock_channel_id', '')
         if not stock_channel_id:
+            logger.warning("[입고알림] stock_channel_id 미설정 → 대시보드 설정에서 '입고 알림 채널 ID'를 저장하세요.")
             return
-        
+
         try:
             channel = self.get_channel(int(stock_channel_id))
-            if channel:
-                total_stock = db.count_available_keys(product['id'])
-                embed = discord.Embed(
-                    title="재고 입고 완료!",
-                    description=f"**{product['name']}** 재고가 입고되었습니다!",
-                    color=brand_color('success')
-                )
-                embed.add_field(name="입고 수량", value=f"**+{key_count}개**", inline=True)
-                embed.add_field(name="현재 재고", value=f"**{total_stock}개**", inline=True)
-                embed.add_field(name="가격", value=f"**{product['price']:,}원**", inline=True)
-                embed.set_footer(text=brand_tag('RESTOCK'))
+            if not channel:
+                try:
+                    channel = await self.fetch_channel(int(stock_channel_id))
+                except Exception:
+                    channel = None
+            if not channel:
+                logger.warning(f"[입고알림] 채널을 찾을 수 없음: {stock_channel_id}")
+                return
+
+            total_stock = db.count_available_keys(product['id'])
+            embed = discord.Embed(
+                title="재고 입고 완료!",
+                description=f"**{product['name']}** 재고가 입고되었습니다!",
+                color=brand_color('success')
+            )
+            embed.add_field(name="입고 수량", value=f"**+{key_count}개**", inline=True)
+            embed.add_field(name="현재 재고", value=f"**{total_stock}개**", inline=True)
+            embed.add_field(name="가격", value=f"**{product['price']:,}원**", inline=True)
+            embed.set_footer(text=brand_tag('RESTOCK'))
+
+            # 카드 이미지 생성 (실패하면 임베드만 전송)
+            file = None
+            try:
+                if cards.available():
+                    spec = cards.stock_spec(
+                        BOT_NAME,
+                        product.get('name', ''),
+                        product.get('category', ''),
+                        product.get('price', 0),
+                        key_count,
+                        total_stock,
+                        description=product.get('description', '')
+                    )
+                    png = cards.render_card(spec)
+                    if png:
+                        file = discord.File(io.BytesIO(png), filename='apex_stock.png')
+                        embed.set_image(url="attachment://apex_stock.png")
+            except Exception as e:
+                logger.warning(f"[입고알림] 카드 생성 실패: {e}")
+
+            if file:
+                await channel.send(embed=embed, file=file)
+            else:
                 await channel.send(embed=embed)
+            logger.info(f"[입고알림] 전송 완료: {product['name']} +{key_count}개 (채널 {stock_channel_id})")
         except Exception as e:
             logger.error(f"Stock notice error: {e}")
     

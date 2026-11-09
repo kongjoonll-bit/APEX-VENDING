@@ -28,7 +28,33 @@ DEFAULT_PRODUCTS = [
     ('50로벅 이상 쿠키', 2500, '50로벅 이상 있는계정 쿠키'),
     ('100로벅 이상 쿠키', 3500, '100로벅 이상 있는계정 쿠키'),
     ('200로벅 이상 쿠키', 7000, '200로벅 이상 있는계정 쿠키'),
+    ('500로벅 이상 쿠키', 15000, '500로벅 이상 있는계정 쿠키, 아주 좋은 계정일 확률이 매우높음'),
+    ('라이벌쿠키', 3500, '라이벌에서 250로벅 이상 사용쿠키'),
+    ('라이벌쿠키', 5000, '라이벌에서 1000로벅 이상 사용쿠키'),
+    ('입양쿠키', 8000, '입양하세요에서 5000로벅 이상 사용쿠키'),
 ]
+
+# ============ DEFAULT SETTINGS (초기화 대비 시드) ============
+# DB 가 초기화되어도 채널 ID/운영 설정이 유지되도록, "없는 키"만 기본값으로 채운다.
+# (대시보드에서 값을 바꾸면 그 값이 우선이며, 덮어쓰지 않는다)
+DEFAULT_SETTINGS = {
+    'bot_name': 'APEX VENDING',
+    'dashboard_url': 'https://apex-vending.onrender.com',
+    'admin_channel_id': '1538065837255041044',
+    'purchase_log_channel_id': '1537817248457170964',
+    'deposit_log_channel_id': '1538129263792754809',
+    'charge_log_channel_id': '1543260455500521573',
+    'stock_channel_id': '1537817166819106827',
+    'notice_channel_id': '1538705204948631652',
+    'purchase_role_id': '1538126406662225981',
+    'review_channel_id': '1537817307475349554',
+    'use_categories': '1',
+    'cookie_check_enabled': '1',
+    'cookie_check_minutes': '3',
+    'cookie_max_age_minutes': '10',
+    'charge_expire_minutes': '5',
+    'deposit_webhook_key': '071763f7a8c9b6e37efef24be2fdb5e9',
+}
 
 def get_conn():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -222,10 +248,11 @@ def get_all_settings():
 
 # ============ PRODUCTS ============
 def seed_default_products(force=False):
-    """기본 상품(DEFAULT_PRODUCTS)이 DB에 존재하도록 보장한다.
+    """기본 상품(DEFAULT_PRODUCTS) + 기본 설정(DEFAULT_SETTINGS)을 DB에 보장한다.
 
-    - 상품이 하나도 없으면(디스크 초기화/새 DB) 17종을 모두 다시 만든다.
-    - 이미 있는 상품(이름 기준)은 가격/설명/재고/판매상태를 덮어쓰지 않는다.
+    - 상품: (이름, 가격, 설명) 조합으로 존재 여부를 판단 → 같은 이름이라도
+      가격/설명이 다르면 별도 상품으로 추가된다.
+    - 설정: "없는 키"만 기본값으로 채운다 (기존 값은 절대 덮어쓰지 않음).
     - 'default_products_seeded' 플래그로 판단하여, 사용자가 관리자 화면에서
       직접 삭제한 상품은 다음 부팅때 되살리지 않는다.
     - force=True 이면 플래그와 무관하게 빠진 기본 상품을 채운다.
@@ -236,8 +263,16 @@ def seed_default_products(force=False):
     try:
         conn = get_conn()
         c = conn.cursor()
-        c.execute('SELECT name FROM products')
-        existing = {row['name'] for row in c.fetchall()}
+
+        # --- 기본 설정 시드 (없는 키만) ---
+        c.execute('SELECT key FROM settings')
+        have = {row['key'] for row in c.fetchall()}
+        for _k, _v in DEFAULT_SETTINGS.items():
+            if _k not in have:
+                c.execute('INSERT INTO settings (key, value) VALUES (?, ?)', (_k, str(_v)))
+
+        c.execute('SELECT name, price, description FROM products')
+        existing = {(row['name'], int(row['price'] or 0), (row['description'] or '')) for row in c.fetchall()}
         c.execute('SELECT COUNT(*) AS n FROM products')
         total = c.fetchone()['n']
 
@@ -245,13 +280,14 @@ def seed_default_products(force=False):
         row = c.fetchone()
         seeded = (row['value'] == '1') if row else False
 
-        # 상품이 남아있고 이미 시드한 DB라면 건드리지 않는다
+        # 상품이 남아있고 이미 시드한 DB라면 상품은 건드리지 않는다
         if total > 0 and seeded and not force:
+            conn.commit()
             conn.close()
             return 0
 
         for name, price, description in DEFAULT_PRODUCTS:
-            if name in existing:
+            if (name, int(price), description) in existing:
                 continue
             c.execute(
                 'INSERT INTO products (name, price, description, stock, active, category) '

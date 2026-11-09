@@ -455,3 +455,45 @@ def review_spec(brand, user, product, category, stars, ticket_no, text, at=None)
     }
 
 
+def stock_spec(brand, product, category, price, added, total_stock, at=None, description=""):
+    """재고 입고 알림 카드 스펙 (입고 채널용)"""
+    product = str(product or "상품")
+    category = (str(category or "").strip() or "기타")
+    try:
+        price = int(price or 0)
+    except Exception:
+        price = 0
+    try:
+        added = int(added or 0)
+    except Exception:
+        added = 0
+    try:
+        total_stock = int(total_stock or 0)
+    except Exception:
+        total_stock = 0
+    desc = " ".join(str(description or "").split())
+    stamp = at or now_text()
+    return {
+        "brand": brand,
+        "status": "입고 완료",
+        "title": "재고 입고",
+        "subtitle": f"{clean(product, 36)} 재고가 도착했습니다",
+        "accent": "#2ECC71",
+        "hero": {
+            "label": "입고 수량",
+            "value": f"+{added}개",
+            "right_title": won(price),
+            "right_sub": "상품 가격",
+        },
+        "rows": [
+            ("상품", product),
+            ("카테고리", category),
+            ("현재 재고", f"{total_stock}개"),
+            ("입고 시각", stamp),
+        ],
+        "body": desc,
+        "footer_left": f"{brand} · 재고 알림",
+        "footer_right": stamp,
+    }
+
+

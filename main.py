@@ -128,17 +128,31 @@ def _validate_session_token(token):
 
 # Global bot instance (지연 생성: 첫 접근 시 bot 모듈을 import)
 class _LazyBot:
-    """VendingBot 인스턴스를 첫 사용 시점에 만든다 (import 지연으로 포트 인식 확보)"""
+    """VendingBot 인스턴스를 첫 사용 시점에 만든다 (import 지연으로 포트 인식 확보)
+
+    스레드 안전: 웹 요청과 백그라운드 시작 스레드가 동시에 접근해
+    인스턴스가 2개 만들어지면 "봇 오프라인"처럼 보이는 버그가 생기므로 락으로 보호한다.
+    """
     def __init__(self):
         object.__setattr__(self, '_inst', None)
+        object.__setattr__(self, '_lock', threading.Lock())
 
     def _get(self):
         inst = object.__getattribute__(self, '_inst')
-        if inst is None:
-            from bot import VendingBot as _VendingBot
-            inst = _VendingBot()
-            object.__setattr__(self, '_inst', inst)
+        if inst is not None:
+            return inst
+        lock = object.__getattribute__(self, '_lock')
+        with lock:
+            inst = object.__getattribute__(self, '_inst')
+            if inst is None:
+                from bot import VendingBot as _VendingBot
+                inst = _VendingBot()
+                object.__setattr__(self, '_inst', inst)
         return inst
+
+    def instance_or_none(self):
+        """이미 만들어진 인스턴스만 반환 (없으면 None) — 상태 조회용"""
+        return object.__getattribute__(self, '_inst')
 
     def __getattr__(self, name):
         return getattr(self._get(), name)
