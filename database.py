@@ -6,6 +6,30 @@ from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'vending.db')
 
+# ============ DEFAULT PRODUCTS (초기화 대비 시드) ============
+# Render 무료 플랜은 재배포 때 디스크가 초기화되어 data/vending.db 가 사라진다.
+# 부팅 시 seed_default_products() 가 "없는 기본 상품"만 다시 만들어 준다.
+# (이름, 가격, 설명)
+DEFAULT_PRODUCTS = [
+    ('로블랜덤쿠키', 550, '로블록스 랜덤쿠키'),
+    ('입양쿠키', 1200, '입양하세요를 플레이한적이 있는 계정의 쿠키'),
+    ('블레이드볼쿠키', 1200, '블레이드볼를 플레이한적이 있는 계정의 쿠키'),
+    ('블피쿠키', 1200, '블록스피스를 플레이한적이 있는 계정의 쿠키'),
+    ('브훔쿠키', 1500, '브레인로트 훔치기를 플레이한적이 있는 계정의 쿠키'),
+    ('리미티드쿠키', 2000, '리미티드가 있는 계정의 쿠키'),
+    ('랜덤로벅쿠키', 1000, '랜덤로벅스가 들어있는 계정의 쿠키'),
+    ('벌시물쿠키', 3000, '벌시뮬을 플레이한적이 있는 계정의 쿠키'),
+    ('배구전설쿠키', 3000, '배구전설을 플레이한적이 있는 계정의 쿠키'),
+    ('입양겜패쿠키', 3000, '입양하세요의 게임패스가 있는 계정의 쿠키'),
+    ('머더미스테리 겜패쿠키', 3000, '머더 미스테리 게임패스가 있는 계정의 쿠키'),
+    ('1만로벅이상사용 쿠키', 1500, '10000로벅 이상 사용한 계정의 쿠키'),
+    ('3만로벅이상사용 쿠키', 4000, '30000로벅 이상 사용한 계정의 쿠키'),
+    ('5만로벅이상사용 쿠키', 6000, '50000로벅 이상 사용한 계정의 쿠키 (레전드쿠키일 확률 가장높음)'),
+    ('50로벅 이상 쿠키', 2500, '50로벅 이상 있는계정 쿠키'),
+    ('100로벅 이상 쿠키', 3500, '100로벅 이상 있는계정 쿠키'),
+    ('200로벅 이상 쿠키', 7000, '200로벅 이상 있는계정 쿠키'),
+]
+
 def get_conn():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -162,6 +186,14 @@ def init_db():
     conn.commit()
     conn.close()
 
+    # DB 가 초기화되었거나(디스크 리셋) 기본 상품이 빠졌으면 자동 복원
+    try:
+        _seeded = seed_default_products()
+        if _seeded:
+            print(f"[DB] 기본 상품 {_seeded}개 자동 복원 완료")
+    except Exception as _e:
+        print(f"[DB] 기본 상품 시드 건너뜀: {_e}")
+
 # ============ SETTINGS ============
 def get_setting(key, default=None):
     conn = get_conn()
@@ -189,6 +221,54 @@ def get_all_settings():
     return {row['key']: row['value'] for row in rows}
 
 # ============ PRODUCTS ============
+def seed_default_products(force=False):
+    """기본 상품(DEFAULT_PRODUCTS)이 DB에 존재하도록 보장한다.
+
+    - 상품이 하나도 없으면(디스크 초기화/새 DB) 17종을 모두 다시 만든다.
+    - 이미 있는 상품(이름 기준)은 가격/설명/재고/판매상태를 덮어쓰지 않는다.
+    - 'default_products_seeded' 플래그로 판단하여, 사용자가 관리자 화면에서
+      직접 삭제한 상품은 다음 부팅때 되살리지 않는다.
+    - force=True 이면 플래그와 무관하게 빠진 기본 상품을 채운다.
+
+    Returns: 새로 추가된 상품 수
+    """
+    inserted = 0
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute('SELECT name FROM products')
+        existing = {row['name'] for row in c.fetchall()}
+        c.execute('SELECT COUNT(*) AS n FROM products')
+        total = c.fetchone()['n']
+
+        c.execute("SELECT value FROM settings WHERE key='default_products_seeded'")
+        row = c.fetchone()
+        seeded = (row['value'] == '1') if row else False
+
+        # 상품이 남아있고 이미 시드한 DB라면 건드리지 않는다
+        if total > 0 and seeded and not force:
+            conn.close()
+            return 0
+
+        for name, price, description in DEFAULT_PRODUCTS:
+            if name in existing:
+                continue
+            c.execute(
+                'INSERT INTO products (name, price, description, stock, active, category) '
+                'VALUES (?, ?, ?, 0, 1, ?)',
+                (name, price, description, '')
+            )
+            inserted += 1
+
+        c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('default_products_seeded', '1')")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[DB] seed_default_products 실패: {e}")
+        return 0
+    return inserted
+
+
 def add_product(name, price, description='', stock=0, category=''):
     conn = get_conn()
     c = conn.cursor()
