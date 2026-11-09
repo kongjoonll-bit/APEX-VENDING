@@ -25,11 +25,51 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from functools import wraps
 import requests
 
-import discord
+import importlib
 import database as db
-from bot import VendingBot, BOT_NAME, brand_color, MAX_KEY_FILE_BYTES, human_size
-import roblox_cookie as cookie_util
-from toss_deposit import TossDepositMonitor
+
+# ============ 지연 로딩 (Render 포트 인식 속도 확보) ============
+# Render 무료 플랜(0.1 vCPU)에서는 discord/Pillow import 만으로 수십 초가 걸려
+# "No open HTTP ports detected"(포트 스캔 60초)가 발생한다.
+# → 웹(Flask)은 가볍게 즉시 뜨고, 무거운 모듈은 백그라운드에서 필요할 때 로드한다.
+class _LazyModule:
+    """모듈을 처음 접근할 때 import 하는 프록시"""
+    def __init__(self, name):
+        object.__setattr__(self, '_name', name)
+        object.__setattr__(self, '_mod', None)
+
+    def _load(self):
+        mod = object.__getattribute__(self, '_mod')
+        if mod is None:
+            mod = importlib.import_module(object.__getattribute__(self, '_name'))
+            object.__setattr__(self, '_mod', mod)
+        return mod
+
+    def __getattr__(self, item):
+        return getattr(self._load(), item)
+
+    def __call__(self, *args, **kwargs):
+        return self._load()(*args, **kwargs)
+
+
+discord = _LazyModule('discord')
+cookie_util = _LazyModule('roblox_cookie')
+
+# bot.py 상수와 동일한 값 (지연 로딩 동안 기본값으로 사용)
+BOT_NAME = 'APEX VENDING'
+MAX_KEY_FILE_BYTES = 8 * 1024 * 1024
+
+def brand_color(*args, **kwargs):
+    from bot import brand_color as _brand_color
+    return _brand_color(*args, **kwargs)
+
+def human_size(num):
+    from bot import human_size as _human_size
+    return _human_size(num)
+
+def VendingBot():
+    from bot import VendingBot as _VendingBot
+    return _VendingBot()
 
 # Setup logging
 logging.basicConfig(
@@ -86,11 +126,54 @@ def _validate_session_token(token):
     saved_token = db.get_setting('admin_session_token', '')
     return saved_token == token
 
-# Global bot instance
-bot = VendingBot()
+# Global bot instance (지연 생성: 첫 접근 시 bot 모듈을 import)
+class _LazyBot:
+    """VendingBot 인스턴스를 첫 사용 시점에 만든다 (import 지연으로 포트 인식 확보)"""
+    def __init__(self):
+        object.__setattr__(self, '_inst', None)
+
+    def _get(self):
+        inst = object.__getattribute__(self, '_inst')
+        if inst is None:
+            from bot import VendingBot as _VendingBot
+            inst = _VendingBot()
+            object.__setattr__(self, '_inst', inst)
+        return inst
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+    def __bool__(self):
+        return True
+
+
+class _LazyTossMonitor:
+    """TossDepositMonitor 를 첫 사용 시점에 만든다"""
+    def __init__(self):
+        object.__setattr__(self, '_inst', None)
+
+    def _get(self):
+        inst = object.__getattribute__(self, '_inst')
+        if inst is None:
+            from toss_deposit import TossDepositMonitor as _Toss
+            inst = _Toss()
+            object.__setattr__(self, '_inst', inst)
+        return inst
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+    def __setattr__(self, name, value):
+        if name.startswith('_'):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._get(), name, value)
+
+
+bot = _LazyBot()
 # 토스 입금 알림 전용 모니터 (Tasker 웹훅 전용 — Pushbullet 사용 안 함)
 # 콜백(handle_deposit)은 아래 DEPOSIT HANDLER 정의 후 연결됨
-toss_monitor = TossDepositMonitor()
+toss_monitor = _LazyTossMonitor()
 
 # ============ PING KEEPER (5분마다) ============
 def _get_ping_url():
@@ -867,12 +950,18 @@ _webhook_log = collections.deque(maxlen=50)
 
 # 디코 입금 로그 채널로 미러링할 레벨 (매 알림마다 오는 'recv'와 잡담성 'info'는 제외)
 _DISCORD_MIRROR_LEVELS = {'deposit', 'match', 'warn', 'error'}
-_DISCORD_MIRROR_META = {
-    'deposit': ('입금 감지', brand_color('info')),
-    'match': ('자동 충전 성공', brand_color('success')),
-    'warn': ('입금 처리 주의', brand_color('warn')),
-    'error': ('입금 처리 오류', brand_color('error')),
-}
+# 지연 초기화: 모듈 import 시점에 bot 을 불러오지 않도록 dict 를 나중에 채운다
+_DISCORD_MIRROR_META = {}
+
+def _mirror_meta():
+    if not _DISCORD_MIRROR_META:
+        _DISCORD_MIRROR_META.update({
+            'deposit': ('입금 감지', brand_color('info')),
+            'match': ('자동 충전 성공', brand_color('success')),
+            'warn': ('입금 처리 주의', brand_color('warn')),
+            'error': ('입금 처리 오류', brand_color('error')),
+        })
+    return _DISCORD_MIRROR_META
 
 def _record_webhook_log(level, message):
     """웹훅 수신/파싱/매칭 결과를 링버퍼에 기록 (대시보드 진단용)
@@ -893,7 +982,7 @@ def _record_webhook_log(level, message):
     # 디코 입금 로그 채널 미러링 (채널 미설정/봇 미준비 시에는 조용히 스킵)
     try:
         if level in _DISCORD_MIRROR_LEVELS and bot.is_ready():
-            title, color = _DISCORD_MIRROR_META.get(level, ('입금 로그', brand_color('info')))
+            title, color = _mirror_meta().get(level, ('입금 로그', brand_color('info')))
             embed = discord.Embed(
                 title=title,
                 description=str(message)[:1000],
@@ -1145,11 +1234,18 @@ def start_ping_keeper():
     logger.info(f"Ping keeper 시작됨 (5분 간격 | 핑 URL: {_get_ping_url() or '미설정'})")
 
 # ============ STARTUP (runs on import for gunicorn) ============
-# Start bot
-start_bot()
+# Flask(웹)가 먼저 뜨고, 무거운 봇 초기화는 몇 초 뒤 백그라운드에서 시작한다.
+# → Render 포트 스캔(60초) 안에 HTTP 응답이 가능해진다.
+def _delayed_startup(delay: float = 3.0):
+    try:
+        time.sleep(delay)
+        start_bot()
+        start_ping_keeper()
+    except Exception as e:
+        logger.error(f"[STARTUP] 지연 초기화 오류: {e}")
 
-# Start ping keeper
-start_ping_keeper()
+threading.Thread(target=_delayed_startup, daemon=True, name='apex-startup').start()
+logger.info("[STARTUP] 웹 서버 준비 완료 (봇은 백그라운드에서 시작)")
 
 # ============ MAIN ============
 if __name__ == '__main__':
