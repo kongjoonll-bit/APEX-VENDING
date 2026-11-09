@@ -569,7 +569,12 @@ class VendingBot(commands.Bot):
             logger.error(f"[쿠키검사] 알림 전송 실패: {e}")
     
     async def ping_loop(self):
-        """5분마다 대시보드/자판기 핑 자동 전송 (비블로킹)"""
+        """5분마다 대시보드/자판기 핑 자동 전송 (비블로킹)
+
+        부팅 직후 self-ping 은 워커 준비 전이라 타임아웃되기 쉬우므로
+        첫 핑은 60초 뒤에 보내고 타임아웃을 30초로 넉넉히 준다.
+        """
+        await asyncio.sleep(60)
         while True:
             try:
                 # 핑 URL: 설정값 우선, 없으면 Render 외부 URL(RENDER_EXTERNAL_URL) 자동 사용
@@ -583,7 +588,7 @@ class VendingBot(commands.Bot):
                     def _do_ping(url=ping_url):
                         import requests as _req
                         try:
-                            resp = _req.get(url + '/ping', timeout=10)
+                            resp = _req.get(url + '/ping', timeout=30)
                             return resp.status_code
                         except Exception as e:
                             logger.warning(f"[PING] error: {e}")

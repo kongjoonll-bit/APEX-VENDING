@@ -107,12 +107,17 @@ def _get_ping_url():
     return url
 
 def ping_keeper():
-    """5분마다 서비스에 핑 전송 (Render 무료 플랜 슬립 방지)"""
+    """5분마다 서비스에 핑 전송 (Render 무료 플랜 슬립 방지)
+
+    부팅 직후에는 워커가 아직 준비되지 않아 self-ping 이 타임아웃되기 쉬우므로
+    첫 핑은 60초 뒤에 보내고, 타임아웃도 넉넉하게(30초) 준다.
+    """
+    time.sleep(60)
     while True:
         try:
             url = _get_ping_url()
             if url:
-                resp = requests.get(url + '/ping', timeout=10)
+                resp = requests.get(url + '/ping', timeout=30)
                 logger.info(f"[PING] {url}/ping -> {resp.status_code} (5분 후 재전송)")
             else:
                 logger.warning("[PING] 핑 URL 미설정! 대시보드 설정에서 '대시보드 URL'을 저장하거나 RENDER_EXTERNAL_URL 환경변수가 필요합니다.")
