@@ -44,6 +44,9 @@ def _channel_id():
 
 
 def enabled():
+    flag = (os.environ.get('DB_BACKUP_ENABLED') or '1').strip().lower()
+    if flag in ('0', 'false', 'no', 'off'):
+        return False
     return bool(_token() and _channel_id())
 
 
