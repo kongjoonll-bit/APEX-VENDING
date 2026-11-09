@@ -79,6 +79,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize database
+# Render 무료 플랜은 재시작/재배포 시 디스크가 초기화되므로,
+# 디스코드 채널에 백업해 둔 DB 가 있으면 먼저 복원한다.
+try:
+    import db_persistence
+    db_persistence.restore(db.DB_PATH)
+except Exception as _e:
+    print(f"[DB] 백업 복원 건너뜀: {_e}")
+
 db.init_db()
 
 # APEX VENDING 리브랜드: 레거시(냥코) 제목 오타 자동교정 로직은 제거되었습니다.
@@ -1253,6 +1261,14 @@ def start_ping_keeper():
 def _delayed_startup(delay: float = 3.0):
     try:
         time.sleep(delay)
+        # DB 자동 백업 시작 (디스코드 채널 저장 → 재시작해도 데이터 유지)
+        try:
+            import db_persistence
+            db_persistence.start_backup_loop(db.DB_PATH)
+            if db_persistence.enabled():
+                logger.info(f"[DB-BACKUP] 자동 백업 시작 (채널 {db_persistence._channel_id()})")
+        except Exception as _e:
+            logger.warning(f"[DB-BACKUP] 백업 시작 실패: {_e}")
         start_bot()
         start_ping_keeper()
     except Exception as e:
