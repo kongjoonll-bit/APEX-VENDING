@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Database
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 업로드된 배너 이미지
+static/uploads/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+# PB �α�
+pushbullet_log.txt
+start_visible.bat
+test_e2e_charge.py
+test_webhook_charge.py
