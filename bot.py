@@ -341,8 +341,25 @@ class VendingBot(commands.Bot):
     
     async def setup_hook(self):
         await self.add_cog(VendingCommands(self))
+        # 앱 커맨드 전역 에러 핸들러 등록
+        # → 배포 겹침(구/신 인스턴스 동시 접속)이나 중복 실행 시 발생하는
+        #   NotFound(10062, Unknown interaction)가 트레이스백으로 터지지 않게 한다.
+        self.tree.on_error = self.on_app_command_error
         await self.tree.sync()
         logger.info(f"========== 봇 버전 {BOT_VERSION} 로드 완료 (자판기 오류 수정본 배포 확인용) ==========")
+
+    async def on_app_command_error(self, interaction: discord.Interaction, error):
+        """앱 슬래시 커맨드 전역 에러 처리"""
+        original = getattr(error, 'original', error)
+        cmd = getattr(getattr(interaction, 'command', None), 'qualified_name', '?')
+        # 10062: 이미 만료/소비된 상호작용 (다른 인스턴스가 먼저 응답한 경우)
+        if isinstance(original, discord.NotFound) and getattr(original, 'code', None) == 10062:
+            logger.warning(f"[CMD] /{cmd} - 상호작용 만료(10062). 다른 인스턴스(로컬/이전 배포)가 먼저 응답했을 수 있습니다.")
+            return
+        if isinstance(original, discord.NotFound):
+            logger.warning(f"[CMD] /{cmd} - 대상 없음(404): {original}")
+            return
+        logger.error(f"[CMD] /{cmd} 처리 중 오류: {original!r}")
     
     async def on_ready(self):
         logger.info(f"Bot logged in as {self.user} (ID: {self.user.id})")
@@ -588,7 +605,7 @@ class VendingBot(commands.Bot):
                     def _do_ping(url=ping_url):
                         import requests as _req
                         try:
-                            resp = _req.get(url + '/ping', timeout=30)
+                            resp = _req.get(url + '/ping', timeout=10)
                             return resp.status_code
                         except Exception as e:
                             logger.warning(f"[PING] error: {e}")

@@ -117,7 +117,7 @@ def ping_keeper():
         try:
             url = _get_ping_url()
             if url:
-                resp = requests.get(url + '/ping', timeout=30)
+                resp = requests.get(url + '/ping', timeout=10)
                 logger.info(f"[PING] {url}/ping -> {resp.status_code} (5분 후 재전송)")
             else:
                 logger.warning("[PING] 핑 URL 미설정! 대시보드 설정에서 '대시보드 URL'을 저장하거나 RENDER_EXTERNAL_URL 환경변수가 필요합니다.")
