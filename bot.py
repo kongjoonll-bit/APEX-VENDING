@@ -1465,9 +1465,24 @@ def _catalog_embed(user_id, category=None):
 
 class CategoryPickMenu(discord.ui.Select):
     def __init__(self, categories):
-        options = [discord.SelectOption(label="전체 보기", value="__all__", description="모든 제품 보기")]
+        def _info(cat):
+            """카테고리 최소 가격과 상품 수"""
+            try:
+                prods = db.get_products_by_category(cat, active_only=True)
+            except Exception:
+                prods = []
+            prices = [int(p['price']) for p in prods if p.get('price')]
+            if not prices:
+                return "판매 상품 없음", 0
+            return f"최소 {min(prices):,}원", len(prods)
+
+        all_prods = db.get_products(active_only=True)
+        all_prices = [int(p['price']) for p in all_prods if p.get('price')]
+        all_desc = f"최소 {min(all_prices):,}원 · {len(all_prods)}개" if all_prices else "상품 없음"
+        options = [discord.SelectOption(label="전체 보기", value="__all__", description=all_desc)]
         for c in categories[:24]:
-            options.append(discord.SelectOption(label=str(c)[:100], value=str(c)[:100]))
+            desc, _n = _info(c)
+            options.append(discord.SelectOption(label=str(c)[:100], value=str(c)[:100], description=desc))
         super().__init__(placeholder="카테고리를 선택하세요", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
@@ -1802,10 +1817,11 @@ class VendingButton(discord.ui.Button):
         if not await self._safe_defer(interaction):
             return
 
-        # 카테고리 사용 시: 먼저 카테고리 선택 화면을 보여준다
+        # 카테고리가 있으면 항상 카테고리 선택 화면을 먼저 보여준다 (설정값과 무관)
         try:
-            use_categories = db.get_setting('use_categories', 'false').lower() == 'true'
-            cats = db.get_categories() if use_categories else []
+            cats = db.get_categories()
+            if not cats:
+                cats = sorted({(p.get('category') or '') for p in db.get_products(active_only=True) if (p.get('category') or '').strip()})
         except Exception:
             cats = []
         if cats:
