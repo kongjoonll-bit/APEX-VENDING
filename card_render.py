@@ -455,31 +455,6 @@ def review_spec(brand, user, product, category, stars, ticket_no, text, at=None)
     }
 
 
-def render_stock_board_padded(brand, items, at=None, size=1600, pad=48):
-    """기존 카드 디자인 그대로 → 1600x1600 정사각 캔버스에 크게 (글자 확대)"""
-    spec = stock_board_spec(brand, items, at=at)
-    png = render_card(spec)
-    if not png:
-        return None
-    try:
-        src = Image.open(io.BytesIO(png)).convert("RGB")
-        inner = size - pad * 2
-        scale = inner / float(src.width)
-        w, h = inner, int(src.height * scale)
-        if h > inner:
-            scale = inner / float(src.height)
-            w, h = int(src.width * scale), inner
-        card = src.resize((max(1, w), max(1, h)), Image.LANCZOS)
-        canvas = Image.new("RGB", (size, size), CARD_BG)
-        canvas.paste(card, ((size - card.width) // 2, (size - card.height) // 2))
-        buf = io.BytesIO()
-        canvas.save(buf, format="PNG", optimize=True)
-        return buf.getvalue()
-    except Exception as e:
-        print(f"[card] stock board padded render failed: {e}")
-        return png
-
-
 def stock_board_spec(brand, items, total_products=0, at=None):
     """재고 보드 카드 스펙 — 재고가 있는 상품만 한눈에 보기 좋게 정렬"""
     items = items or []
