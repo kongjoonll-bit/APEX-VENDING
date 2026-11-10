@@ -402,6 +402,7 @@ class VendingBot(commands.Bot):
         logger.info(f"Bot logged in as {self.user} (ID: {self.user.id})")
         try:
             db.set_setting('bot_heartbeat', str(int(time.time())))
+            self.bot_loop = asyncio.get_running_loop()
         except Exception:
             pass
         self.ready_event.set()

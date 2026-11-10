@@ -97,6 +97,14 @@ if _saved_dash_url.endswith('/dashboard'):
     db.set_setting('dashboard_url', _saved_dash_url[:-len('/dashboard')])
     logger.info(f"대시보드 URL 자동 정규화: /dashboard 제거 -> {db.get_setting('dashboard_url', '')}")
 
+def _bot_loop():
+    """봇 이벤트 루프 (없으면 None) — non-async 컨텍스트에서 bot.loop 직접 접근 금지"""
+    try:
+        return getattr(bot, 'bot_loop', None)
+    except Exception:
+        return None
+
+
 def _bot_online():
     """봇 온라인 판정 — 같은 프로세스 is_ready() 또는 최근 하트비트(DB) 기준"""
     try:
@@ -312,7 +320,7 @@ def send_to_discord_channel(setting_key, embed=None, content=None):
             return False
 
     try:
-        future = asyncio.run_coroutine_threadsafe(_do_send(), bot.loop)
+        future = asyncio.run_coroutine_threadsafe(_do_send(), _bot_loop())
         return bool(future.result(timeout=20))
     except Exception as e:
         logger.error(f"[DISCORD] '{setting_key}' 전송 스케줄 오류: {e}")
@@ -329,7 +337,7 @@ def send_dm_safe(user_id, embed=None, content=None):
         return await bot.send_dm(user_id, content=content, embed=embed)
 
     try:
-        future = asyncio.run_coroutine_threadsafe(_do_send(), bot.loop)
+        future = asyncio.run_coroutine_threadsafe(_do_send(), _bot_loop())
         ok = future.result(timeout=20)
         if not ok:
             logger.warning(f"[DISCORD] DM 전송 실패 (유저 ID: {user_id}) - DM 차단 또는 잘못된 ID일 수 있음")
@@ -643,9 +651,9 @@ def api_add_keys(pid):
     product = db.get_product(pid)
     if product and bot.is_ready():
         try:
-            asyncio.run_coroutine_threadsafe(bot.send_stock_notice(product, count), bot.loop)
-            asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(), bot.loop)
-            asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), bot.loop)
+            asyncio.run_coroutine_threadsafe(bot.send_stock_notice(product, count), _bot_loop())
+            asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(), _bot_loop())
+            asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), _bot_loop())
         except Exception as e:
             logger.error(f"Stock notice error: {e}")
 
@@ -684,10 +692,10 @@ def api_add_key_files(pid):
     # 입고 채널 공지 + 자판기 새로고침 (봇이 실행 중일 때만)
     if bot.is_ready():
         try:
-            asyncio.run_coroutine_threadsafe(bot.send_stock_notice(product, count), bot.loop)
-            asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(), bot.loop)
+            asyncio.run_coroutine_threadsafe(bot.send_stock_notice(product, count), _bot_loop())
+            asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(), _bot_loop())
             # 새로 등록한 파일은 즉시 쿠키 검사 (검사 전에는 판매되지 않음)
-            asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), bot.loop)
+            asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), _bot_loop())
         except Exception as e:
             logger.error(f"Stock notice error: {e}")
 
@@ -737,7 +745,7 @@ def api_upload_vending_banner():
     # 자판기 즉시 갱신
     if bot.is_ready():
         try:
-            asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(force_edit=True), bot.loop)
+            asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(force_edit=True), _bot_loop())
         except Exception as e:
             logger.error(f"Banner refresh error: {e}")
 
@@ -757,7 +765,7 @@ def api_recheck_cookies():
     if not _bot_online():
         return jsonify({'success': False, 'message': '봇이 오프라인입니다. 봇이 켜진 뒤 다시 시도해주세요.'}), 503
     try:
-        asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), bot.loop)
+        asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), _bot_loop())
         return jsonify({'success': True, 'message': '쿠키 재검사를 시작했습니다.'})
     except Exception as e:
         logger.error(f"Cookie recheck error: {e}")
@@ -864,7 +872,7 @@ def api_stock_board_refresh():
     if not _bot_online():
         return jsonify({'success': False, 'error': '봇이 오프라인입니다. 봇 접속 후 다시 시도해주세요.'}), 503
     try:
-        asyncio.run_coroutine_threadsafe(bot.refresh_stock_board(), bot.loop)
+        asyncio.run_coroutine_threadsafe(bot.refresh_stock_board(), _bot_loop())
         return jsonify({'success': True, 'message': '재고 보드 갱신을 요청했습니다. 채널을 확인하세요.'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -929,7 +937,7 @@ def api_update_settings():
     # 자판기 관련 설정이 바뀌면 즉시 패널 갱신
     if needs_refresh and bot.is_ready():
         try:
-            asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(force_edit=True), bot.loop)
+            asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(force_edit=True), _bot_loop())
         except Exception as e:
             logger.error(f"Settings refresh error: {e}")
 
