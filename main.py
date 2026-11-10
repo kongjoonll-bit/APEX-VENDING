@@ -98,7 +98,7 @@ if _saved_dash_url.endswith('/dashboard'):
     logger.info(f"대시보드 URL 자동 정규화: /dashboard 제거 -> {db.get_setting('dashboard_url', '')}")
 
 def _bot_loop():
-    """봇 이벤트 루프 (없으면 None) — non-async 컨텍스트에서 bot.loop 직접 접근 금지"""
+    """봇 이벤트 루프 (없으면 None) — non-async 컨텍스트에서 _bot_loop() 직접 접근 금지"""
     try:
         return getattr(bot, 'bot_loop', None)
     except Exception:
