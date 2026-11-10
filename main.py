@@ -857,6 +857,19 @@ def api_cancel_order(oid):
         logger.error(f"Cancel order error: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
+@app.route('/api/stock-board/refresh', methods=['POST'])
+@login_required
+def api_stock_board_refresh():
+    """재고 보드 즉시 갱신 (입고 채널 메시지 수정)"""
+    if not _bot_online():
+        return jsonify({'success': False, 'error': '봇이 오프라인입니다. 봇 접속 후 다시 시도해주세요.'}), 503
+    try:
+        asyncio.run_coroutine_threadsafe(bot.refresh_stock_board(), bot.loop)
+        return jsonify({'success': True, 'message': '재고 보드 갱신을 요청했습니다. 채널을 확인하세요.'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # --- Settings ---
 @app.route('/api/db/backup', methods=['POST'])
 @login_required
