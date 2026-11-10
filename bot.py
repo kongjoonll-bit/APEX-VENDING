@@ -1,3 +1,4 @@
+from datetime import datetime
 import discord
 from discord import ui
 from discord.ext import commands
@@ -362,6 +363,7 @@ class VendingBot(commands.Bot):
         return retry_after
     
     async def setup_hook(self):
+        self.bot_loop = asyncio.get_running_loop()
         await self.add_cog(VendingCommands(self))
         # 앱 커맨드 전역 에러 핸들러 등록
         # → 배포 겹침(구/신 인스턴스 동시 접속)이나 중복 실행 시 발생하는
@@ -683,7 +685,7 @@ class VendingBot(commands.Bot):
                 title="재고 현황",
                 description=desc[:4000],
                 color=brand_color('success'),
-                timestamp=datetime.now()
+                timestamp=discord.utils.utcnow()
             )
             embed.set_image(url='attachment://stock_board.png')
             embed.set_footer(text="APEX VENDING · 재고 보드 (30분마다 자동 갱신)")
@@ -2698,7 +2700,7 @@ class ConfirmBuyButton(discord.ui.Button):
                         title="구매 완료",
                         description=f"**{interaction.user.name}** 님이 상품을 구매했습니다!",
                         color=brand_color('info'),
-                        timestamp=datetime.now()
+                        timestamp=discord.utils.utcnow()
                     )
                     embed_log.add_field(name="주문번호", value=f"#{order_id}", inline=True)
                     embed_log.add_field(name="구매자", value=f"{interaction.user.mention} ({interaction.user.name})", inline=True)
