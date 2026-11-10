@@ -373,7 +373,7 @@ class VendingBot(commands.Bot):
         try:
             import time as _t
             last_sync = float(db.get_setting('last_tree_sync', '0') or 0)
-            if _t.time() - last_sync > 6 * 3600:
+            if _t.time() - last_sync > 300:
                 await self.tree.sync()
                 db.set_setting('last_tree_sync', str(int(_t.time())))
                 logger.info("[SYNC] 슬래시 커맨드 동기화 완료")
