@@ -845,6 +845,29 @@
         
         <!-- Settings Tab -->
         <div class="tab-content" id="tab-settings">
+<div style="margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,.12)">
+  <h3 style="margin:0 0 10px">시스템</h3>
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn btn-primary" type="button" onclick="apexSys('backup',this)">지금 백업</button>
+    <button class="btn btn-secondary" type="button" onclick="apexSys('board',this)">재고 보드 갱신</button>
+  </div>
+  <div id="apex-sys-msg" style="margin-top:8px;font-size:13px;opacity:.85"></div>
+</div>
+<script>
+async function apexSys(kind, btn){
+  var url = (kind === 'backup') ? '/api/db/backup' : '/api/stock-board/refresh';
+  var box = document.getElementById('apex-sys-msg');
+  var old = btn.textContent;
+  btn.disabled = true; btn.textContent = '처리 중...';
+  try {
+    var r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}});
+    var j = {}; try { j = await r.json(); } catch(e) {}
+    box.textContent = (j.message || j.error || ('HTTP ' + r.status));
+  } catch(e) { box.textContent = '요청 실패: ' + e; }
+  btn.disabled = false; btn.textContent = old;
+}
+</script>
+
             <div class="card">
                 <h3><i class="fas fa-cog"></i> 봇 설정</h3>
                 <div class="form-group">

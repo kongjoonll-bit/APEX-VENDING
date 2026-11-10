@@ -2889,6 +2889,54 @@ class BulkPointsConfirmButton(discord.ui.Button):
             )
 
 
+
+class InquiryModal(discord.ui.Modal, title="문의 접수"):
+    reason = discord.ui.TextInput(label="문의 내용", style=discord.TextStyle.paragraph,
+                                  placeholder="문의 내용을 자세히 적어주세요", required=True, max_length=1000)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+        category_id = (db.get_setting('ticket_category_id', '') or '').strip()
+        category = interaction.client.get_channel(int(category_id)) if category_id else None
+        if not category or not isinstance(category, discord.CategoryChannel):
+            await interaction.followup.send("문의 카테고리가 설정되지 않았습니다. 관리자에게 문의해 주세요.", ephemeral=True)
+            return
+        overwrites = {
+            interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, read_message_history=True),
+            interaction.guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, read_message_history=True),
+        }
+        try:
+            for a in db.get_admins():
+                m = interaction.guild.get_member(int(a['user_id']))
+                if m:
+                    overwrites[m] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, read_message_history=True)
+        except Exception:
+            pass
+        try:
+            ch = await category.create_text_channel(name=f"문의-{interaction.user.name}"[:90], overwrites=overwrites)
+            e = discord.Embed(title="문의 접수", description=self.reason.value[:1000], color=brand_color('info'))
+            e.add_field(name="작성자", value=interaction.user.mention, inline=True)
+            e.set_footer(text=brand_tag('INQUIRY'))
+            await ch.send(content=interaction.user.mention, embed=e)
+            await interaction.followup.send(f"문의가 접수되었습니다: {ch.mention}", ephemeral=True)
+        except Exception as ex:
+            logger.error(f"[INQUIRY] 티켓 생성 실패: {ex}")
+            await interaction.followup.send(f"문의 접수에 실패했습니다: {ex}", ephemeral=True)
+
+
+class InquiryPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="문의하기", style=discord.ButtonStyle.primary, custom_id="inquiry_open_btn")
+    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(InquiryModal())
+
+
 class VendingCommands(commands.Cog):
     def __init__(self, bot: VendingBot):
         self.bot = bot
@@ -2901,6 +2949,21 @@ class VendingCommands(commands.Cog):
     
     # ============ ADMIN COMMANDS ============
     
+    @app_commands.command(name="문의패널", description="[관리자] 문의 패널을 현재 채널에 생성합니다")
+    async def inquiry_panel(self, interaction: discord.Interaction):
+        if not self.is_admin_check(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        embed = discord.Embed(
+            title="문의 접수",
+            description="아래 **문의하기** 버튼을 눌러 문의 내용을 작성해 주세요.\n접수된 문의는 비공개 채널에서 처리됩니다.",
+            color=brand_color('main')
+        )
+        embed.set_footer(text=brand_tag('INQUIRY'))
+        await interaction.channel.send(embed=embed, view=InquiryPanelView())
+        await interaction.followup.send("문의 패널을 생성했습니다.", ephemeral=True)
+
     @app_commands.command(name="자판기설정", description="[관리자] 현재 채널에 버튼 자판기를 설치합니다")
     async def setup_vending(self, interaction: discord.Interaction):
         if not self.is_admin_check(interaction):
