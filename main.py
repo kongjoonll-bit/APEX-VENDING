@@ -97,6 +97,20 @@ if _saved_dash_url.endswith('/dashboard'):
     db.set_setting('dashboard_url', _saved_dash_url[:-len('/dashboard')])
     logger.info(f"대시보드 URL 자동 정규화: /dashboard 제거 -> {db.get_setting('dashboard_url', '')}")
 
+def _bot_online():
+    """봇 온라인 판정 — 같은 프로세스 is_ready() 또는 최근 하트비트(DB) 기준"""
+    try:
+        if bot.is_ready():
+            return True
+    except Exception:
+        pass
+    try:
+        hb = int(db.get_setting('bot_heartbeat', '0') or 0)
+        return (time.time() - hb) < 120
+    except Exception:
+        return False
+
+
 # Create Flask app
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'apex-vending-secret-key-change-me')
@@ -498,7 +512,7 @@ def dashboard():
     webhook_full_url = f"{_base}/api/deposit-webhook?key={webhook_key}"
 
     # Bot status
-    bot_status = 'online' if bot.is_ready() else 'offline'
+    bot_status = 'online' if _bot_online() else 'offline'
 
     return render_template('dashboard.html',
         stats=stats,
@@ -740,7 +754,7 @@ def api_cookie_status():
 @login_required
 def api_recheck_cookies():
     """미사용 파일 재고의 쿠키를 즉시 재검사 (봇 이벤트 루프에서 백그라운드 실행)"""
-    if not bot.is_ready():
+    if not _bot_online():
         return jsonify({'success': False, 'message': '봇이 오프라인입니다. 봇이 켜진 뒤 다시 시도해주세요.'}), 503
     try:
         asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), bot.loop)

@@ -400,6 +400,10 @@ class VendingBot(commands.Bot):
     
     async def on_ready(self):
         logger.info(f"Bot logged in as {self.user} (ID: {self.user.id})")
+        try:
+            db.set_setting('bot_heartbeat', str(int(time.time())))
+        except Exception:
+            pass
         self.ready_event.set()
         await self.change_presence(activity=discord.Game(name=f"{BOT_NAME} | v{BOT_VERSION}"))
         await self.restore_vending_machines()
@@ -777,6 +781,10 @@ class VendingBot(commands.Bot):
         logger.info("[충전리마인더] 루프 시작 (3분 무충전 시 DM 알림)")
         while True:
             try:
+                try:
+                    db.set_setting('bot_heartbeat', str(int(time.time())))
+                except Exception:
+                    pass
                 if self.is_ready():
                     await self._process_charge_reminders()
             except Exception as e:
