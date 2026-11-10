@@ -655,7 +655,8 @@ class VendingBot(commands.Bot):
 
             if not cards.available():
                 return
-            png = cards.render_stock_board(BOT_NAME, items)
+            spec = cards.stock_board_spec(BOT_NAME, items, len(db.get_products(active_only=True)))
+            png = cards.render_card(spec)
             if not png:
                 return
             file = discord.File(io.BytesIO(png), filename='stock_board.png')
