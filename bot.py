@@ -419,6 +419,10 @@ class VendingBot(commands.Bot):
         if not getattr(self, '_cookie_task_started', False):
             self._cookie_task_started = True
             self.loop.create_task(self.cookie_check_loop())
+        # 재고 보드 30분 주기 갱신
+        if not getattr(self, '_stock_board_started', False):
+            self._stock_board_started = True
+            self.loop.create_task(self.stock_board_loop())
         # 버튼 아이콘(애플리케이션 이모지) 동기화
         if not getattr(self, '_emoji_sync_started', False):
             self._emoji_sync_started = True
@@ -622,6 +626,75 @@ class VendingBot(commands.Bot):
         except Exception as e:
             logger.error(f"[쿠키검사] 알림 전송 실패: {e}")
     
+    async def refresh_stock_board(self):
+        """재고 채널에 '재고 있는 상품 전체' 보드 이미지를 게시/갱신"""
+        channel_id = (db.get_setting('stock_channel_id', '') or '').strip()
+        if not channel_id:
+            return
+        if self._is_rate_limited():
+            logger.warning("[재고보드] 레이트리밋 백오프 중 - 스킵")
+            return
+        try:
+            channel = self.get_channel(int(channel_id)) or await self.fetch_channel(int(channel_id))
+            if not channel:
+                logger.warning(f"[재고보드] 채널 없음: {channel_id}")
+                return
+
+            items = []
+            for p in db.get_products(active_only=True):
+                stock = db.count_available_keys(p['id'])
+                if stock > 0:
+                    items.append({
+                        'name': p['name'], 'price': p['price'],
+                        'stock': stock, 'category': p.get('category') or ''
+                    })
+
+            if not cards.available():
+                return
+            spec = cards.stock_board_spec(BOT_NAME, items, len(db.get_products(active_only=True)))
+            png = cards.render_card(spec)
+            if not png:
+                return
+            file = discord.File(io.BytesIO(png), filename='stock_board.png')
+            embed = discord.Embed(color=brand_color('success'))
+            embed.set_image(url='attachment://stock_board.png')
+
+            msg_id = db.get_setting('stock_board_message_id', '')
+            if msg_id:
+                try:
+                    msg = await channel.fetch_message(int(msg_id))
+                    await msg.edit(embed=embed, attachments=[file])
+                    logger.info(f"[재고보드] 갱신 완료 ({len(items)}개 상품)")
+                    return
+                except discord.NotFound:
+                    pass
+                except discord.HTTPException as e:
+                    if e.status == 429:
+                        self._note_rate_limit(e)
+                        return
+                    logger.warning(f"[재고보드] 수정 실패, 새로 전송: {e}")
+
+            new_msg = await channel.send(embed=embed, file=file)
+            db.set_setting('stock_board_message_id', str(new_msg.id))
+            logger.info(f"[재고보드] 게시 완료 ({len(items)}개 상품)")
+        except discord.HTTPException as e:
+            if e.status == 429:
+                self._note_rate_limit(e)
+            logger.warning(f"[재고보드] 실패: {e}")
+        except Exception as e:
+            logger.warning(f"[재고보드] 실패: {e}")
+
+    async def stock_board_loop(self):
+        """30분마다 재고 보드 갱신"""
+        logger.info("[재고보드] 30분 주기 갱신 시작")
+        while True:
+            try:
+                if self.is_ready():
+                    await self.refresh_stock_board()
+            except Exception as e:
+                logger.warning(f"[재고보드] 루프 오류: {e}")
+            await asyncio.sleep(1800)
+
     async def ping_loop(self):
         """5분마다 대시보드/자판기 핑 자동 전송 (비블로킹)
 

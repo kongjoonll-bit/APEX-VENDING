@@ -455,6 +455,42 @@ def review_spec(brand, user, product, category, stars, ticket_no, text, at=None)
     }
 
 
+def stock_board_spec(brand, items, total_products=0, at=None):
+    """재고 보드 카드 스펙 — 재고가 있는 상품만 한눈에 보기 좋게 정렬"""
+    items = items or []
+    total_stock = sum(int(i.get("stock") or 0) for i in items)
+    # 재고 많은 순 → 카테고리 → 이름
+    ordered = sorted(
+        items,
+        key=lambda i: (-int(i.get("stock") or 0), str(i.get("category") or ""), str(i.get("name") or ""))
+    )
+    rows = []
+    for it in ordered[:18]:
+        name = clean(it.get("name") or "상품", 22)
+        price = won(it.get("price") or 0)
+        rows.append((name, f"{price}  ·  {int(it.get('stock') or 0)}개"))
+    if len(ordered) > 18:
+        rows.append(("외 %d개 상품" % (len(ordered) - 18), "재고 있음"))
+
+    stamp = at or now_text()
+    return {
+        "brand": brand,
+        "status": "판매 가능",
+        "title": "재고 현황",
+        "subtitle": f"지금 바로 구매 가능한 {len(items)}개 상품",
+        "accent": "#2ECC71",
+        "hero": {
+            "label": "재고 보유 상품",
+            "value": f"{len(items)}개",
+            "right_title": f"{total_stock}개",
+            "right_sub": "총 재고 수량",
+        },
+        "rows": rows if rows else [("재고 없음", "입고 대기중")],
+        "footer_left": f"{brand} · 재고 보드 (30분마다 갱신)",
+        "footer_right": stamp,
+    }
+
+
 def stock_spec(brand, product, category, price, added, total_stock, at=None, description=""):
     """재고 입고 알림 카드 스펙 (입고 채널용)"""
     product = str(product or "상품")
