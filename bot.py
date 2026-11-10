@@ -312,15 +312,30 @@ class VendingBot(commands.Bot):
         self.vending_messages = {}
         # ---- 레이트리밋(429) 방지 상태 ----
         self._rate_limited_until = 0.0        # time.monotonic() 기준 전역 429 블록 해제 시각
+        self._rate_limit_streak = 0            # 연속 429 횟수 (백오프 지수 증가용)
+        self._channel_cache = {}               # 채널 객체 캐시 (fetch_channel 호출 최소화)
         self._refresh_lock = asyncio.Lock()   # 자판기 새로고침 중복 실행 방지
         self._refresh_tick = 0                # 주기적 메시지 실존 확인용 카운터
+
+    def _clear_rate_limit(self):
+        """정상 응답을 받으면 백오프 단계 초기화"""
+        if time.monotonic() >= self._rate_limited_until:
+            self._rate_limit_streak = 0
 
     def _is_rate_limited(self):
         """Discord API 전역 레이트리밋(429) 백오프 중인지 여부"""
         return time.monotonic() < self._rate_limited_until
 
     def _note_rate_limit(self, err):
-        """429 응답 기록 - 지정 시간 동안 Discord API 요청을 멈춘다 (악순환 차단)"""
+        """429 응답 기록 - 지정 시간 동안 Discord API 요청을 멈춘다 (악순환 차단)
+
+        - 일반 429: retry_after 기반
+        - Cloudflare 1015(IP 차단): HTML 응답이라 retry_after 가 없으므로 2분부터
+          지수적으로 늘려 최대 30분까지 차단한다.
+        """
+        text = str(err)
+        cf_block = ('1015' in text) or ('Cloudflare' in text) or ('Access denied' in text)
+
         retry_after = 10.0  # 최소 10초 백오프
         exc_retry = getattr(err, 'retry_after', None)
         if exc_retry:
@@ -330,12 +345,19 @@ class VendingBot(commands.Bot):
                 pass
         else:
             # 예외 메시지에서 retry_after 값 파싱 (버전별 호환)
-            m = re.search(r'retry_after["\s:]+([\d.]+)', str(err))
+            m = re.search(r'retry_after["\s:]+([\d.]+)', text)
             if m:
                 try:
                     retry_after = max(retry_after, float(m.group(1)) + 1.0)
                 except (TypeError, ValueError):
                     pass
+
+        # 연속 429 → 지수 백오프 (최대 30분)
+        self._rate_limit_streak = getattr(self, '_rate_limit_streak', 0) + 1
+        if cf_block:
+            retry_after = max(retry_after, 120.0)
+        retry_after = min(1800.0, retry_after * (2 ** (self._rate_limit_streak - 1)))
+
         self._rate_limited_until = max(self._rate_limited_until, time.monotonic() + retry_after)
         return retry_after
     
@@ -345,7 +367,22 @@ class VendingBot(commands.Bot):
         # → 배포 겹침(구/신 인스턴스 동시 접속)이나 중복 실행 시 발생하는
         #   NotFound(10062, Unknown interaction)가 트레이스백으로 터지지 않게 한다.
         self.tree.on_error = self.on_app_command_error
-        await self.tree.sync()
+        # 커맨드 구성이 바뀌지 않았다면 sync 를 건너뛴다 (부팅 시 API 호출 절감 → 429 예방)
+        try:
+            import time as _t
+            last_sync = float(db.get_setting('last_tree_sync', '0') or 0)
+            if _t.time() - last_sync > 6 * 3600:
+                await self.tree.sync()
+                db.set_setting('last_tree_sync', str(int(_t.time())))
+                logger.info("[SYNC] 슬래시 커맨드 동기화 완료")
+            else:
+                logger.info("[SYNC] 최근 6시간 내 동기화됨 - 생략 (API 호출 절감)")
+        except Exception as e:
+            logger.warning(f"[SYNC] 동기화 확인 실패, 강제 동기화: {e}")
+            try:
+                await self.tree.sync()
+            except Exception:
+                pass
         logger.info(f"========== 봇 버전 {BOT_VERSION} 로드 완료 (자판기 오류 수정본 배포 확인용) ==========")
 
     async def on_app_command_error(self, interaction: discord.Interaction, error):
@@ -1486,21 +1523,49 @@ class CategorySelect(discord.ui.Select):
 class VendingButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         action = self.custom_id.split('_')[1] if len(self.custom_id.split('_')) > 1 else ''
-        
-        if action == 'products':
-            await self.show_products(interaction)
-        elif action == 'charge':
-            await self.show_charge(interaction)
-        elif action == 'buy':
-            await self.show_buy_menu(interaction)
-        elif action == 'info':
-            await self.show_info(interaction)
-        elif action == 'ticket':
-            await self.show_ticket(interaction)
-    
+
+        try:
+            if action == 'products':
+                await self.show_products(interaction)
+            elif action == 'charge':
+                await self.show_charge(interaction)
+            elif action == 'buy':
+                await self.show_buy_menu(interaction)
+            elif action == 'info':
+                await self.show_info(interaction)
+            elif action == 'ticket':
+                await self.show_ticket(interaction)
+        except discord.HTTPException as e:
+            # 429(특히 Cloudflare 1015 IP 차단) 는 트레이스백 대신 백오프만 기록
+            if e.status == 429:
+                retry = self.view.bot._note_rate_limit(e) if getattr(self, 'view', None) and getattr(self.view, 'bot', None) else 120
+                logger.warning(f"[VENDING] 버튼 응답 429 - {retry:.0f}초 백오프 (액션={action})")
+            else:
+                logger.warning(f"[VENDING] 버튼 처리 실패 (액션={action}): {e}")
+        except Exception as e:
+            logger.error(f"[VENDING] 버튼 처리 오류 (액션={action}): {e}")
+
+    async def _safe_defer(self, interaction):
+        """interaction 응답 지연(defer). 429/만료 상황에서도 예외를 밖으로 던지지 않는다."""
+        try:
+            await interaction.response.defer(ephemeral=True)
+            return True
+        except discord.NotFound:
+            logger.warning("[VENDING] 상호작용 만료(10062) - 이미 처리된 클릭")
+            return False
+        except discord.HTTPException as e:
+            if e.status == 429:
+                bot = getattr(getattr(self, 'view', None), 'bot', None)
+                retry = bot._note_rate_limit(e) if bot else 120
+                logger.warning(f"[VENDING] defer 429 - {retry:.0f}초 백오프")
+            else:
+                logger.warning(f"[VENDING] defer 실패: {e}")
+            return False
+
     async def show_products(self, interaction):
-        # defer 먼저 호출하여 interaction 3초 제한 초과 방지
-        await interaction.response.defer(ephemeral=True)
+        # defer 먼저 호출하여 interaction 3초 제한 초과 방지 (429/만료는 무시)
+        if not await self._safe_defer(interaction):
+            return
         
         products = db.get_products(active_only=True)
         
