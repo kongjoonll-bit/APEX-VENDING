@@ -515,6 +515,19 @@ def delete_key(key_id):
     conn.commit()
     conn.close()
 
+def count_listable_keys(product_id):
+    """재고 보드 표시용 — 사용/무효만 제외하고 신선도(쿠키검사 시간)는 무시"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute(
+        'SELECT COUNT(*) as cnt FROM keys WHERE product_id=? AND used=0 AND IFNULL(invalid,0)=0',
+        (product_id,)
+    )
+    row = c.fetchone()
+    conn.close()
+    return int(row['cnt']) if row else 0
+
+
 def count_available_keys(product_id):
     """판매 가능한 재고 수 (만료/미검사 파일은 제외)"""
     conn = get_conn()

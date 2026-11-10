@@ -649,7 +649,7 @@ class VendingBot(commands.Bot):
 
             items = []
             for p in db.get_products(active_only=True):
-                stock = db.count_available_keys(p['id'])
+                stock = db.count_listable_keys(p['id'])
                 if stock > 0:
                     items.append({
                         'name': p['name'], 'price': p['price'],
