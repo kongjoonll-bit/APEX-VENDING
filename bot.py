@@ -1384,6 +1384,78 @@ class CategoryPickView(discord.ui.View):
         self.add_item(CategoryPickMenu(categories))
 
 
+class ExchangePickMenu(discord.ui.Select):
+    """최근 30분 이내 구매 상품 선택 → 교환 티켓 생성"""
+    def __init__(self, orders):
+        self.orders = orders
+        opts = []
+        for o in orders[:25]:
+            label = str(o.get('product_name') or '상품')[:70]
+            opts.append(discord.SelectOption(
+                label=label,
+                value=str(o['id']),
+                description=f"{int(o.get('amount') or 0):,}원 · {str(o.get('created_at'))[:16]}"
+            ))
+        super().__init__(placeholder="교환할 상품을 선택하세요", min_values=1, max_values=1, options=opts)
+
+    async def callback(self, interaction: discord.Interaction):
+        order = next((o for o in self.orders if str(o['id']) == self.values[0]), None)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+        if not order:
+            await interaction.followup.send("주문 정보를 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        category_id = (db.get_setting('ticket_category_id', '') or '').strip()
+        category = interaction.client.get_channel(int(category_id)) if category_id else None
+        if not category or not isinstance(category, discord.CategoryChannel):
+            await interaction.followup.send("티켓 카테고리가 설정되지 않았습니다. 관리자에게 문의해 주세요.", ephemeral=True)
+            return
+
+        overwrites = {
+            interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, read_message_history=True),
+            interaction.guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, read_message_history=True),
+        }
+        try:
+            for admin in db.get_admins():
+                m = interaction.guild.get_member(int(admin['user_id']))
+                if m:
+                    overwrites[m] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True, read_message_history=True)
+        except Exception:
+            pass
+
+        try:
+            ch = await category.create_text_channel(
+                name=f"교환-{interaction.user.name}"[:90], overwrites=overwrites
+            )
+            embed = discord.Embed(
+                title="불량교환 요청",
+                description=(
+                    f"**상품** : {order.get('product_name')}\n"
+                    f"**금액** : {int(order.get('amount') or 0):,}원\n"
+                    f"**주문번호** : #{order.get('id')}\n"
+                    f"**구매시각** : {order.get('created_at')}\n\n"
+                    "교환 사유와 함께 스크린샷/영상을 남겨주세요."
+                ),
+                color=brand_color('warn')
+            )
+            embed.set_footer(text=brand_tag('EXCHANGE'))
+            await ch.send(content=f"{interaction.user.mention}", embed=embed)
+            await interaction.followup.send(f"교환 티켓이 생성되었습니다: {ch.mention}", ephemeral=True)
+        except Exception as e:
+            logger.error(f"[EXCHANGE] 티켓 생성 실패: {e}")
+            await interaction.followup.send(f"티켓 생성에 실패했습니다: {e}", ephemeral=True)
+
+
+class ExchangePickView(discord.ui.View):
+    def __init__(self, orders):
+        super().__init__(timeout=180)
+        self.add_item(ExchangePickMenu(orders))
+
+
 class VendingMainView(ui.LayoutView):
     """Components V2: 임베드 컨테이너 안에 드롭다운+버튼이 통합됨"""
     def __init__(self):
@@ -1832,18 +1904,26 @@ class VendingButton(discord.ui.Button):
             except:
                 pass
         
-        # 불량교환 자격: 최근 30분 이내 구매(확정/완료) 이력이 있어야 티켓 생성 가능
-        recent_order = db.has_recent_order(str(interaction.user.id), 30)
-        if not recent_order:
+        # 불량교환: 최근 30분 이내 구매 상품을 선택해서 티켓 생성
+        orders = db.get_recent_orders(str(interaction.user.id), 30)
+        if not orders:
             await interaction.response.send_message(
                 "**불량교환은 최근 30분 이내 구매한 상품만 신청할 수 있습니다.**\n\n"
                 "구매 내역이 확인되지 않았습니다.\n"
                 "· 구매 후 30분이 지났거나\n"
-                "· 아직 결제가 확정되지 않은 경우입니다.\n\n"
-                "문의가 필요하면 일반 문의 채널을 이용해 주세요.",
+                "· 아직 결제가 확정되지 않은 경우입니다.",
                 ephemeral=True
             )
             return
+
+        embed = discord.Embed(
+            title="불량교환 신청",
+            description="최근 30분 이내 구매한 상품입니다.\n교환할 상품을 아래에서 선택해 주세요.",
+            color=brand_color('warn')
+        )
+        embed.set_footer(text=brand_tag('EXCHANGE'))
+        await interaction.response.send_message(embed=embed, view=ExchangePickView(orders), ephemeral=True)
+        return
 
         # Get ticket category
         category_id = db.get_setting('ticket_category_id', '')
