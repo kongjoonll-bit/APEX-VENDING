@@ -674,6 +674,24 @@ def mark_order_reviewed(oid):
     conn.commit()
     conn.close()
 
+def get_recent_orders(user_id, minutes=30, limit=10):
+    """최근 N분 이내 구매(확정/완료) 목록 — 불량교환 상품 선택용"""
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, product_name, amount, created_at FROM orders "
+            "WHERE user_id=? AND status IN ('confirmed','completed') "
+            "AND created_at >= datetime('now', ?) ORDER BY id DESC LIMIT ?",
+            (str(user_id), f'-{int(minutes)} minutes', int(limit))
+        )
+        rows = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
 def has_recent_order(user_id, minutes=30):
     """최근 N분 이내에 구매(완료/확정)한 주문이 있는지 — 불량교환 티켓 자격 확인용"""
     try:
