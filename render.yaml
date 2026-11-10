@@ -3,6 +3,7 @@ services:
     name: apex-vending
     runtime: python
     plan: free
+    region: oregon          # US (Oregon) — Singapore 리전에서 Discord/Cloudflare IP 차단(1015) 발생
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120 --graceful-timeout 30 --access-logfile - --error-logfile -
     autoDeploy: false
@@ -10,9 +11,11 @@ services:
       - key: DISCORD_TOKEN
         sync: false
       - key: SECRET_KEY
-        generateValue: true
+        sync: false
       - key: DEPOSIT_WEBHOOK_KEY
         sync: false
+      - key: DB_BACKUP_CHANNEL_ID
+        value: "1538065837255041044"
       - key: PYTHON_VERSION
         value: 3.11.0
 
