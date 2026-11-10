@@ -614,28 +614,34 @@ def api_delete_product(pid):
 @app.route('/api/products/<int:pid>/keys', methods=['POST'])
 @login_required
 def api_add_keys(pid):
+    """텍스트 재고 입력 → TXT 파일로 변환해 재고에 추가"""
     data = request.json
     keys_text = data.get('keys', '')
     key_list = [k.strip() for k in keys_text.split('\n') if k.strip()]
     if not key_list:
         return jsonify({'error': '키를 입력해주세요.'}), 400
-    db.add_keys(pid, key_list)
-    
-    # 입고 채널에 공지 전송 + 자판기 새로고침 (봇이 실행 중일 때만)
+
+    entries = []
+    for idx, k in enumerate(key_list, 1):
+        entries.append((f'key_{idx}.txt', k.encode('utf-8')))
+    count = db.add_key_files(pid, entries)
+
     product = db.get_product(pid)
     if product and bot.is_ready():
         try:
-            # 봇의 이벤트 루프에서 안전하게 실행 (스레드 간 호출)
-            asyncio.run_coroutine_threadsafe(bot.send_stock_notice(product, len(key_list)), bot.loop)
+            asyncio.run_coroutine_threadsafe(bot.send_stock_notice(product, count), bot.loop)
             asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(), bot.loop)
+            asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), bot.loop)
         except Exception as e:
             logger.error(f"Stock notice error: {e}")
-    
-    return jsonify({'success': True, 'count': len(key_list)})
+
+    return jsonify({'success': True, 'count': count})
 
 @app.route('/api/products/<int:pid>/keyfiles', methods=['POST'])
 @login_required
 def api_add_key_files(pid):
+    """(제거됨) TXT 파일 업로드 — 텍스트 입력으로 통합되었습니다. 텍스트는 자동으로 TXT 로 변환 저장됩니다."""
+    return jsonify({'error': '파일 업로드는 지원하지 않습니다. 텍스트로 입력하면 자동으로 TXT 재고로 저장됩니다.'}), 410
     """파일(txt 등) 재고 업로드 — multipart/form-data, 필드명 'files' (다중 선택 가능)"""
     product = db.get_product(pid)
     if not product:
