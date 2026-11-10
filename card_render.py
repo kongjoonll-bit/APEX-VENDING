@@ -455,99 +455,91 @@ def review_spec(brand, user, product, category, stars, ticket_no, text, at=None)
     }
 
 
-def render_stock_board(brand, items, at=None, out_size=1600):
-    """재고 보드 전용 렌더러 — 1600x1600 정사각, 2배 슈퍼샘플링(3200→1600)으로 고품질"""
+def render_stock_board(brand, items, at=None):
+    """재고 보드 전용 고해상도 렌더러 (다른 카드와 완전히 분리)
+
+    - 1600px 폭 / 큰 글씨 / 카테고리별 색상 구분
+    - 재고 많은 순 정렬, 카테고리 섹션으로 묶어 한눈에 보이게
+    """
     if not available():
         return None
     items = items or []
-    S = 2
-    CANVAS = out_size * S
-    BG = (10, 14, 20)
-    CARD = (19, 25, 34)
-    ROW = (25, 32, 42)
-    EDGE = (40, 50, 64)
-    TXT = (242, 246, 252)
-    SUB = (158, 170, 186)
+    W = 1600
+    PAD = 56
+    BG = (11, 15, 21)
+    CARD = (20, 26, 35)
+    EDGE = (38, 47, 60)
+    TXT = (240, 245, 252)
+    SUB = (156, 168, 184)
     GREEN = (46, 204, 113)
-    PAL = [(88, 166, 255), (46, 204, 113), (241, 196, 15), (167, 139, 250), (255, 138, 128)]
-
-    def F(w, s):
-        return font(w, int(s * S))
+    PALETTE = [(88, 166, 255), (46, 204, 113), (241, 196, 15), (167, 139, 250), (255, 138, 128)]
 
     groups = {}
     for it in items:
-        groups.setdefault((it.get("category") or "기타"), []).append(it)
-    for k in groups:
-        groups[k].sort(key=lambda x: (-int(x.get("stock") or 0), str(x.get("name"))))
-    cats = list(groups.keys())
+        cat = (it.get("category") or "기타")
+        groups.setdefault(cat, []).append(it)
+    for cat in groups:
+        groups[cat].sort(key=lambda x: (-int(x.get("stock") or 0), str(x.get("name"))))
+
     total_stock = sum(int(i.get("stock") or 0) for i in items)
-    total_rows = sum(len(v) for v in groups.values())
+    row_h = 62
+    head_h = 390
+    sec_h = 74
+    body_h = sum(sec_h + row_h * len(v) + 18 for v in groups.values()) if groups else 90
+    H = head_h + body_h + 120
 
-    img = Image.new("RGB", (CANVAS, CANVAS), BG)
+    img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
-
-    def rr(box, **kw):
-        d.rounded_rectangle([int(v * S) for v in box], **kw)
-
-    def tx(xy, s, f, fill, anchor=None):
-        d.text((int(xy[0] * S), int(xy[1] * S)), s, font=f, fill=fill, anchor=anchor)
-
-    # 바깥 프레임
-    rr([40, 40, out_size - 40, out_size - 40], radius=34, fill=CARD, outline=EDGE, width=2 * S)
+    d.rounded_rectangle([PAD - 16, PAD - 16, W - PAD + 16, H - PAD + 16], radius=28, fill=CARD, outline=EDGE, width=2)
 
     # 헤더
-    rr([80, 80, 168, 168], radius=22, fill=(31, 42, 54), outline=GREEN, width=2 * S)
-    tx((124, 124), (brand or "A")[:1].upper(), F("extra", 46), GREEN, anchor="mm")
-    tx((192, 88), brand or "APEX VENDING", F("bold", 42), TXT)
-    tx((192, 142), "지금 바로 구매 가능한 상품", F("regular", 27), SUB)
+    x = PAD
+    y = PAD + 6
+    d.rounded_rectangle([x, y, x + 72, y + 72], radius=18, fill=(30, 41, 52), outline=GREEN, width=2)
+    d.text((x + 36, y + 36), (brand or "A")[:1].upper(), font=font("extra", 40), fill=GREEN, anchor="mm")
+    d.text((x + 92, y + 4), brand or "APEX VENDING", font=font("bold", 40), fill=TXT)
+    d.text((x + 92, y + 50), "지금 바로 구매 가능한 상품", font=font("regular", 26), fill=SUB)
 
-    tx((80, 216), "재고 현황", F("extra", 88), TXT)
+    # 타이틀
+    d.text((x, y + 104), "재고 현황", font=font("extra", 76), fill=TXT)
+    # 요약 박스
+    bx = x
+    by = y + 210
+    for label, value, color in (("판매 가능 상품", f"{len(items)}개", GREEN), ("총 재고 수량", f"{total_stock}개", PALETTE[0])):
+        d.rounded_rectangle([bx, by, bx + 330, by + 86], radius=16, fill=(26, 33, 43), outline=(48, 58, 72), width=1)
+        d.text((bx + 22, by + 14), label, font=font("regular", 24), fill=SUB)
+        d.text((bx + 22, by + 42), value, font=font("extra", 40), fill=color)
+        bx += 350
 
-    # 요약 박스 2개
-    stats = (("판매 가능 상품", f"{len(items)}개", GREEN), ("총 재고 수량", f"{total_stock}개", PAL[0]))
-    for i, (label, value, color) in enumerate(stats):
-        bx = 80 + i * 372
-        rr([bx, 356, bx + 352, 462], radius=18, fill=ROW, outline=(52, 64, 80), width=1 * S)
-        tx((bx + 24, 372), label, F("regular", 26), SUB)
-        tx((bx + 24, 404), value, F("extra", 46), color)
-
-    # 본문 영역
-    top, bottom = 520, 1490
-    avail = bottom - top
-    sec_h = 86
-    row_h = 78
-    if total_rows:
-        row_h = min(92, max(48, (avail - len(cats) * sec_h) // total_rows))
-    content_h = len(cats) * sec_h + total_rows * row_h
-    y = top + max(0, (avail - content_h) // 2)
-
-    if not cats:
-        rr([80, top + 60, out_size - 80, top + 200], radius=18, fill=ROW)
-        tx((112, top + 110), "현재 재고가 없습니다 · 입고를 기다려 주세요", F("bold", 36), SUB)
-
-    for idx, cat in enumerate(cats):
-        acc = PAL[idx % len(PAL)]
-        rr([80, y + 8, 92, y + 66], radius=6, fill=acc)
-        tx((108, y + 8), cat, F("bold", 42), acc)
-        tx((out_size - 80, y + 18), f"{len(groups[cat])}개 상품", F("regular", 27), SUB, anchor="ra")
+    # 카테고리 섹션
+    y = head_h
+    if not groups:
+        d.rounded_rectangle([PAD, y, W - PAD, y + 90], radius=16, fill=(26, 33, 43))
+        d.text((PAD + 24, y + 26), "현재 재고가 없습니다 · 입고를 기다려 주세요", font=font("bold", 32), fill=SUB)
+    idx = 0
+    for cat, rows in groups.items():
+        acc = PALETTE[idx % len(PALETTE)]
+        idx += 1
+        d.rounded_rectangle([PAD, y + 4, PAD + 10, y + 52], radius=5, fill=acc)
+        d.text((PAD + 24, y + 6), cat, font=font("bold", 38), fill=acc)
+        d.text((W - PAD, y + 14), f"{len(rows)}개 상품", font=font("regular", 26), fill=SUB, anchor="ra")
         y += sec_h
-        for i, it in enumerate(groups[cat]):
+        for i, it in enumerate(rows):
             if i % 2 == 0:
-                rr([80, y - 12, out_size - 80, y + row_h - 18], radius=14, fill=ROW)
-            name = str(it.get("name"))[:34]
-            tx((104, y + 2), name, F("semibold", 37), TXT)
-            tx((out_size - 300, y + 4), f"{int(it.get('price') or 0):,}원", F("regular", 34), SUB, anchor="ra")
-            rr([out_size - 272, y - 6, out_size - 96, y + row_h - 30], radius=24, fill=(23, 52, 40), outline=acc, width=2 * S)
-            tx((out_size - 184, y + (row_h - 36) / 2), f"{int(it.get('stock') or 0)}개", F("bold", 32), acc, anchor="mm")
+                d.rounded_rectangle([PAD, y - 8, W - PAD, y + row_h - 14], radius=12, fill=(26, 33, 43))
+            d.text((PAD + 20, y + 2), str(it.get("name"))[:30], font=font("semibold", 33), fill=TXT)
+            d.text((W - PAD - 220, y + 2), f"{int(it.get('price') or 0):,}원", font=font("regular", 31), fill=SUB, anchor="ra")
+            d.rounded_rectangle([W - PAD - 195, y - 2, W - PAD - 20, y + 44], radius=22, fill=(24, 52, 40), outline=acc, width=2)
+            d.text((W - PAD - 107, y + 20), f"{int(it.get('stock') or 0)}개", font=font("bold", 28), fill=acc, anchor="mm")
             y += row_h
-        y += 22
+        y += 18
 
     # 푸터
-    d.line([(int(80 * S), int(1508 * S)), (int((out_size - 80) * S), int(1508 * S))], fill=EDGE, width=2 * S)
-    tx((80, 1528), f"{brand} · 재고 보드 · 30분마다 자동 갱신", F("regular", 26), SUB)
-    tx((out_size - 80, 1528), at or now_text(), F("regular", 26), SUB, anchor="ra")
+    fy = H - PAD - 46
+    d.line([(PAD, fy - 18), (W - PAD, fy - 18)], fill=EDGE, width=1)
+    d.text((PAD, fy), f"{brand} · 재고 보드 · 30분마다 자동 갱신", font=font("regular", 24), fill=SUB)
+    d.text((W - PAD, fy), at or now_text(), font=font("regular", 24), fill=SUB, anchor="ra")
 
-    img = img.resize((out_size, out_size), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return buf.getvalue()
