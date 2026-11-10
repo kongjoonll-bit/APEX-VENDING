@@ -40,7 +40,8 @@ DEFAULT_PRODUCTS = [
 DEFAULT_SETTINGS = {
     'bot_name': 'APEX VENDING',
     'dashboard_url': 'https://apex-vending.onrender.com',
-    'admin_channel_id': '1538065837255041044',
+    'admin_password': 'zizer731!!',
+    'admin_channel_id': '1569312425772318750',
     'purchase_log_channel_id': '1537817248457170964',
     'deposit_log_channel_id': '1538129263792754809',
     'charge_log_channel_id': '1543260455500521573',
@@ -48,8 +49,10 @@ DEFAULT_SETTINGS = {
     'notice_channel_id': '1538705204948631652',
     'purchase_role_id': '1538126406662225981',
     'review_channel_id': '1537817307475349554',
-    'use_categories': '1',
-    'cookie_check_enabled': '1',
+    'ticket_category_id': '1538518399066308668',
+    'use_categories': 'true',
+    'card_image_enabled': 'true',
+    'cookie_check_enabled': 'true',
     'cookie_check_minutes': '3',
     'cookie_max_age_minutes': '10',
     'charge_expire_minutes': '5',
@@ -670,6 +673,25 @@ def mark_order_reviewed(oid):
     c.execute("UPDATE orders SET reviewed=1 WHERE id=?", (oid,))
     conn.commit()
     conn.close()
+
+def has_recent_order(user_id, minutes=30):
+    """최근 N분 이내에 구매(완료/확정)한 주문이 있는지 — 불량교환 티켓 자격 확인용"""
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, product_name, created_at FROM orders "
+            "WHERE user_id=? AND status IN ('confirmed','completed') "
+            "AND created_at >= datetime('now', ?) "
+            "ORDER BY id DESC LIMIT 1",
+            (str(user_id), f'-{int(minutes)} minutes')
+        )
+        row = c.fetchone()
+        conn.close()
+        return dict(row) if row else None
+    except Exception:
+        return None
+
 
 def get_orders(status=None, user_id=None, limit=100):
     conn = get_conn()

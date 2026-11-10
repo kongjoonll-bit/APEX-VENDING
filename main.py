@@ -838,6 +838,43 @@ def api_cancel_order(oid):
         return jsonify({'success': False, 'message': str(e)}), 500
 
 # --- Settings ---
+@app.route('/api/db/backup', methods=['POST'])
+@login_required
+def api_db_backup():
+    """DB 수동 백업 (디스코드 백업 채널로 업로드) — 원할 때만 실행"""
+    try:
+        import db_persistence
+        if not db_persistence.enabled():
+            return jsonify({'success': False, 'error': 'DISCORD_TOKEN 또는 DB_BACKUP_CHANNEL_ID가 설정되지 않았습니다.'}), 400
+        ok = db_persistence.backup_once(db.DB_PATH)
+        if ok:
+            return jsonify({'success': True, 'message': '백업 완료', 'channel': db_persistence._channel_id()})
+        return jsonify({'success': False, 'error': '업로드 실패 (로그 확인: [DB-BACKUP])'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/db/restore', methods=['POST'])
+@login_required
+def api_db_restore():
+    """DB 수동 복원 (백업 채널의 최신 파일로 교체) — 주의: 현재 데이터 덮어씀"""
+    try:
+        import db_persistence
+        if not db_persistence.enabled():
+            return jsonify({'success': False, 'error': '백업 설정이 없습니다.'}), 400
+        # 현재 DB 를 백업한 뒤 복원
+        db_persistence.backup_once(db.DB_PATH)
+        try:
+            os.remove(db.DB_PATH)
+        except Exception:
+            pass
+        ok = db_persistence.restore(db.DB_PATH)
+        db.init_db()
+        return jsonify({'success': bool(ok), 'message': '복원 완료' if ok else '복원할 백업이 없습니다.'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/settings', methods=['GET'])
 @login_required
 def api_get_settings():
@@ -970,14 +1007,15 @@ import collections
 _webhook_log_lock = threading.Lock()
 _webhook_log = collections.deque(maxlen=50)
 
-# 디코 입금 로그 채널로 미러링할 레벨 (매 알림마다 오는 'recv'와 잡담성 'info'는 제외)
-_DISCORD_MIRROR_LEVELS = {'deposit', 'match', 'warn', 'error'}
+# 디코 입금 로그 채널로 미러링할 레벨 (recv 포함 → 어떤 알림이 왔는지 채널에서 바로 확인 가능)
+_DISCORD_MIRROR_LEVELS = {'recv', 'deposit', 'match', 'warn', 'error'}
 # 지연 초기화: 모듈 import 시점에 bot 을 불러오지 않도록 dict 를 나중에 채운다
 _DISCORD_MIRROR_META = {}
 
 def _mirror_meta():
     if not _DISCORD_MIRROR_META:
         _DISCORD_MIRROR_META.update({
+            'recv': ('입금 알림 수신', brand_color('info')),
             'deposit': ('입금 감지', brand_color('info')),
             'match': ('자동 충전 성공', brand_color('success')),
             'warn': ('입금 처리 주의', brand_color('warn')),
@@ -988,8 +1026,8 @@ def _mirror_meta():
 def _record_webhook_log(level, message):
     """웹훅 수신/파싱/매칭 결과를 링버퍼에 기록 (대시보드 진단용)
 
-    중요 레벨(deposit/match/warn/error)은 설정된 디코 입금 로그 채널
-    ('deposit_log_channel_id')로도 자동 미러링된다.
+    중요 레벨은 설정된 디코 입금 로그 채널('deposit_log_channel_id')로도 자동 미러링된다.
+    봇이 아직 준비되지 않았으면 이유를 남겨 원인 추적이 가능하게 한다.
     """
     try:
         with _webhook_log_lock:
@@ -1001,20 +1039,28 @@ def _record_webhook_log(level, message):
     except Exception:
         pass
 
-    # 디코 입금 로그 채널 미러링 (채널 미설정/봇 미준비 시에는 조용히 스킵)
+    # 디코 입금 로그 채널 미러링
     try:
-        if level in _DISCORD_MIRROR_LEVELS and bot.is_ready():
-            title, color = _mirror_meta().get(level, ('입금 로그', brand_color('info')))
-            embed = discord.Embed(
-                title=title,
-                description=str(message)[:1000],
-                color=color,
-                timestamp=datetime.now()
-            )
-            embed.set_footer(text="APEX VENDING · 입금 로그")
-            send_to_discord_channel('deposit_log_channel_id', embed=embed)
-    except Exception:
-        pass
+        if level not in _DISCORD_MIRROR_LEVELS:
+            return
+        channel_id = (db.get_setting('deposit_log_channel_id', '') or '').strip()
+        if not channel_id:
+            logger.warning("[입금로그] deposit_log_channel_id 미설정 → 대시보드 설정에서 '입금 로그 채널 ID'를 저장하세요.")
+            return
+        if not bot.is_ready():
+            logger.warning(f"[입금로그] 봇 미접속 상태라 전송 보류: {str(message)[:80]}")
+            return
+        title, color = _mirror_meta().get(level, ('입금 로그', brand_color('info')))
+        embed = discord.Embed(
+            title=title,
+            description=str(message)[:1000],
+            color=color,
+            timestamp=datetime.now()
+        )
+        embed.set_footer(text="APEX VENDING · 입금 로그")
+        send_to_discord_channel('deposit_log_channel_id', embed=embed)
+    except Exception as e:
+        logger.warning(f"[입금로그] 채널 전송 실패: {e}")
 
 # 충전 요청 유효 시간 기본값 (분) - 설정키: charge_expire_minutes
 DEFAULT_CHARGE_EXPIRE_MINUTES = 30

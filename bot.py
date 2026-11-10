@@ -1326,6 +1326,64 @@ class VendingBot(commands.Bot):
 
 # ============ VENDING MACHINE VIEWS ============
 
+def _catalog_embed(user_id, category=None):
+    """제품 목록 임베드 생성 (카테고리 지정 시 해당 카테고리만)"""
+    if category:
+        products = db.get_products_by_category(category, active_only=True)
+        title = f"제품 · {category}"
+    else:
+        products = db.get_products(active_only=True)
+        title = "전체 제품"
+
+    embed = discord.Embed(
+        title=title,
+        description=(
+            f"-# 보유 포인트 **{db.get_balance(str(user_id)):,}P** · 구매 즉시 DM으로 전달"
+        ),
+        color=brand_color('main')
+    )
+    if not products:
+        embed.add_field(name="상품 준비중", value="해당 카테고리에 판매 중인 상품이 없습니다.", inline=False)
+    else:
+        lines = []
+        for p in products:
+            stock = db.count_available_keys(p['id'])
+            stock_text = f"재고 {stock}개" if stock > 0 else "품절"
+            lines.append(f"▸ {p['name']} · **{p['price']:,}원** · {stock_text}")
+            desc_text = product_desc(p, 90)
+            if desc_text:
+                lines.append(f"-# {desc_text}")
+        embed.add_field(name=f"{len(products)}개 상품", value="\n".join(lines)[:1000], inline=False)
+    embed.set_footer(text=brand_tag('CATALOG'))
+    return embed
+
+
+class CategoryPickMenu(discord.ui.Select):
+    def __init__(self, categories):
+        options = [discord.SelectOption(label="전체 보기", value="__all__", description="모든 제품 보기")]
+        for c in categories[:24]:
+            options.append(discord.SelectOption(label=str(c)[:100], value=str(c)[:100]))
+        super().__init__(placeholder="카테고리를 선택하세요", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
+        cat = None if self.values[0] == '__all__' else self.values[0]
+        try:
+            embed = _catalog_embed(interaction.user.id, cat)
+            await interaction.edit_original_response(embed=embed, view=None)
+        except Exception as e:
+            logger.warning(f"[CATALOG] 카테고리 목록 표시 실패: {e}")
+
+
+class CategoryPickView(discord.ui.View):
+    def __init__(self, categories):
+        super().__init__(timeout=180)
+        self.add_item(CategoryPickMenu(categories))
+
+
 class VendingMainView(ui.LayoutView):
     """Components V2: 임베드 컨테이너 안에 드롭다운+버튼이 통합됨"""
     def __init__(self):
@@ -1382,10 +1440,10 @@ class VendingMainView(ui.LayoutView):
             ui.TextDisplay(desc),
             ui.ActionRow(CategorySelect()),
             ui.ActionRow(
-                VendingButton(label="구매", emoji=app_emoji('cart'), style=discord.ButtonStyle.primary, custom_id="vending_products"),
+                VendingButton(label="제품", emoji=app_emoji('cart'), style=discord.ButtonStyle.primary, custom_id="vending_products"),
                 VendingButton(label="충전", emoji=app_emoji('card'), style=discord.ButtonStyle.success, custom_id="vending_charge"),
                 VendingButton(label="정보", emoji=app_emoji('info'), style=discord.ButtonStyle.secondary, custom_id="vending_info"),
-                VendingButton(label="문의", emoji=app_emoji('mail'), style=discord.ButtonStyle.secondary, custom_id="vending_ticket"),
+                VendingButton(label="불량교환", emoji=app_emoji('refund'), style=discord.ButtonStyle.secondary, custom_id="vending_ticket"),
             ),
             ui.Separator(),
             ui.TextDisplay(status_text),
@@ -1566,7 +1624,23 @@ class VendingButton(discord.ui.Button):
         # defer 먼저 호출하여 interaction 3초 제한 초과 방지 (429/만료는 무시)
         if not await self._safe_defer(interaction):
             return
-        
+
+        # 카테고리 사용 시: 먼저 카테고리 선택 화면을 보여준다
+        try:
+            use_categories = db.get_setting('use_categories', 'false').lower() == 'true'
+            cats = db.get_categories() if use_categories else []
+        except Exception:
+            cats = []
+        if cats:
+            embed = discord.Embed(
+                title="제품 카테고리",
+                description="아래에서 카테고리를 선택하면 해당 제품 목록이 표시됩니다.",
+                color=brand_color('main')
+            )
+            embed.set_footer(text=brand_tag('CATALOG'))
+            await interaction.followup.send(embed=embed, view=CategoryPickView(cats), ephemeral=True)
+            return
+
         products = db.get_products(active_only=True)
         
         embed = discord.Embed(
@@ -1758,6 +1832,19 @@ class VendingButton(discord.ui.Button):
             except:
                 pass
         
+        # 불량교환 자격: 최근 30분 이내 구매(확정/완료) 이력이 있어야 티켓 생성 가능
+        recent_order = db.has_recent_order(str(interaction.user.id), 30)
+        if not recent_order:
+            await interaction.response.send_message(
+                "**불량교환은 최근 30분 이내 구매한 상품만 신청할 수 있습니다.**\n\n"
+                "구매 내역이 확인되지 않았습니다.\n"
+                "· 구매 후 30분이 지났거나\n"
+                "· 아직 결제가 확정되지 않은 경우입니다.\n\n"
+                "문의가 필요하면 일반 문의 채널을 이용해 주세요.",
+                ephemeral=True
+            )
+            return
+
         # Get ticket category
         category_id = db.get_setting('ticket_category_id', '')
         if not category_id:

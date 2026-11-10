@@ -153,7 +153,11 @@ def backup_once(db_path):
 
 
 def start_backup_loop(db_path):
-    """변경 감지 시 백업하는 백그라운드 스레드 시작"""
+    """자동 백업 루프 — 기본 OFF. 자동으로 돌리려면 DB_BACKUP_AUTO=1 로 설정."""
+    flag = (os.environ.get('DB_BACKUP_AUTO') or '0').strip().lower()
+    if flag not in ('1', 'true', 'yes', 'on'):
+        print('[DB-BACKUP] 자동 백업 꺼짐 (수동: 대시보드 "지금 백업" 버튼 또는 DB_BACKUP_AUTO=1)')
+        return None
     if not enabled():
         return None
 
