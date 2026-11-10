@@ -656,8 +656,32 @@ class VendingBot(commands.Bot):
             if not png:
                 return
             file = discord.File(io.BytesIO(png), filename='stock_board.png')
-            embed = discord.Embed(color=brand_color('success'))
+
+            # 텍스트(임베드)로도 읽기 쉽게 정리 — 이미지 + 목록 동시에 제공
+            ordered = sorted(
+                items,
+                key=lambda i: (-int(i['stock']), str(i.get('category') or ''), str(i['name']))
+            )
+            lines = []
+            for i in ordered[:40]:
+                cat = f"[{i['category']}] " if i.get('category') else ''
+                lines.append(f"▸ {cat}**{i['name']}** · {int(i['price']):,}원 · 재고 **{i['stock']}개**")
+            if len(ordered) > 40:
+                lines.append(f"-# 외 {len(ordered) - 40}개 상품")
+            total_stock = sum(int(i['stock']) for i in items)
+            desc = (
+                f"**지금 구매 가능한 상품 {len(items)}개 · 총 재고 {total_stock}개**\n"
+                + ("\n".join(lines) if lines else "현재 재고가 없습니다. 입고를 기다려 주세요.")
+            )
+
+            embed = discord.Embed(
+                title="재고 현황",
+                description=desc[:4000],
+                color=brand_color('success'),
+                timestamp=datetime.now()
+            )
             embed.set_image(url='attachment://stock_board.png')
+            embed.set_footer(text="APEX VENDING · 재고 보드 (30분마다 자동 갱신)")
 
             msg_id = db.get_setting('stock_board_message_id', '')
             if msg_id:
