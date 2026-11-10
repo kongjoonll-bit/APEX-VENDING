@@ -716,15 +716,25 @@ class VendingBot(commands.Bot):
             logger.warning(f"[재고보드] 실패: {e}")
 
     async def stock_board_loop(self):
-        """30분마다 재고 보드 갱신"""
+        """30분 주기 + 대시보드/구매 요청 즉시 갱신"""
         logger.info("[재고보드] 30분 주기 갱신 시작")
+        waited = 0
         while True:
             try:
                 if self.is_ready():
-                    await self.refresh_stock_board()
+                    if waited >= 1800:
+                        await self.refresh_stock_board()
+                        waited = 0
+                    else:
+                        req = (db.get_setting('stock_board_refresh_req', '') or '').strip()
+                        if req:
+                            db.set_setting('stock_board_refresh_req', '')
+                            await self.refresh_stock_board()
+                            waited = 0
             except Exception as e:
                 logger.warning(f"[재고보드] 루프 오류: {e}")
-            await asyncio.sleep(1800)
+            await asyncio.sleep(20)
+            waited += 20
 
     async def ping_loop(self):
         """5분마다 대시보드/자판기 핑 자동 전송 (비블로킹)
