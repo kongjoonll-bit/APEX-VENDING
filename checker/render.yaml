@@ -1,0 +1,34 @@
+services:
+  # 1) 체커 웹 (결과 페이지)
+  - type: web
+    name: apex-checker-web
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: checker
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn web:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+
+  # 2) 체커 봇 (구매자 역할 전용)
+  - type: worker
+    name: apex-checker-bot
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: checker
+    buildCommand: pip install -r requirements.txt
+    startCommand: python checker_bot.py
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: BUYER_ROLE_ID
+        value: "1538126406662225981"
+      - key: WEB_BASE_URL
+        value: https://apex-checker-web.onrender.com
+      - key: CHECKER_TOKEN
+        sync: false
