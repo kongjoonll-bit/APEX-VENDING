@@ -256,7 +256,14 @@ def init_db():
 #   예) "Инструкция - @cookiestock_faq"
 _NOISE_MARKERS = ('инструкция', 'cookiestock_faq', 'instrukciya')
 _NOISE_SCAN_LINES = 6          # 상단 몇 줄까지만 검사
+_STOCK_BRAND_NAME_PLACEHOLDER = None
 STOCK_BRAND_NAME = 'Apex로블쿠키'   # 안내문 대체 문구 / 지급 파일명
+
+# 'Инструкция - @cookiestock_faq' **문구만** 'Apex로블쿠키'로 치환한다.
+# 그 외 문자(쿠키 본문·줄바꿈·다른 문장)는 절대 건드리지 않는다.
+_NOISE_RE = re.compile(
+    r'(?i)Инструкция[ \t]*[-–—:][ \t]*@?cookiestock_faq'
+)
 
 
 def stock_file_name(original_name: str, fallback_ext: str = '.txt') -> str:
@@ -271,27 +278,13 @@ def stock_file_name(original_name: str, fallback_ext: str = '.txt') -> str:
 
 
 def strip_stock_header_text(text: str) -> str:
-    """재고 텍스트 상단의 안내문을 브랜드명(Apex로블쿠키)으로 교체"""
+    """'Инструкция - @cookiestock_faq' 문구만 'Apex로블쿠키'로 치환
+
+    다른 글자/줄/쿠키는 절대 변경하지 않는다(그대로 보존).
+    """
     if not text:
         return text
-    lines = text.splitlines()
-    kept = []
-    replaced = False
-    for i, line in enumerate(lines):
-        low = line.strip().lower()
-        if (not replaced and i < _NOISE_SCAN_LINES and low
-                and any(m in low for m in _NOISE_MARKERS)):
-            kept.append(STOCK_BRAND_NAME)
-            replaced = True
-            continue
-        if (replaced and i < _NOISE_SCAN_LINES and low
-                and any(m in low for m in _NOISE_MARKERS)):
-            continue      # 중복 안내문 라인은 제거
-        kept.append(line)
-    cleaned = '\n'.join(kept)
-    if text.endswith('\n'):
-        cleaned += '\n'
-    return cleaned
+    return _NOISE_RE.sub(STOCK_BRAND_NAME, text)
 
 
 def strip_stock_header_bytes(data: bytes) -> bytes:
