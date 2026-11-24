@@ -928,16 +928,16 @@
                     충전로그 채널 전송 (기본 꺼짐)
                 </label>
 
-                <h3 style="margin:0 0 12px;font-size:15px">누적구매 티어 · 할인</h3>
+                <h3 style="margin:0 0 12px;font-size:15px">누적구매 등급 · 할인</h3>
                 <label style="font-size:13px;display:block;margin-bottom:12px">
                     <input type="checkbox" name="tier_enabled"
                            {% if settings.get('tier_enabled','false') == 'true' %}checked{% endif %}>
-                    티어 자동 지급 사용 (누적 결제금액 기준 · 역할 부여 + 결제 금액 할인)
+                    등급 자동 지급 사용 (누적 결제금액 기준 · 역할 부여 + 결제 금액 할인)
                 </label>
                 <div style="overflow:auto">
                     <table style="width:100%;border-collapse:collapse;font-size:13px">
                         <thead><tr style="text-align:left;opacity:.75">
-                            <th style="padding:6px">티어</th>
+                            <th style="padding:6px">등급</th>
                             <th style="padding:6px">등급 이름</th>
                             <th style="padding:6px">기준 누적금액(원)</th>
                             <th style="padding:6px">할인(%)</th>
@@ -946,7 +946,7 @@
                         <tbody>
                         {% for i in [1,2,3,4,5] %}
                         <tr>
-                            <td style="padding:6px;font-weight:600">티어 {{ i }}</td>
+                            <td style="padding:6px;font-weight:600">등급 {{ i }}</td>
                             <td style="padding:6px"><input name="tier{{ i }}_name" value="{{ tier_cfg[i].name }}"
                                 placeholder="예: 브론즈"
                                 style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(148,163,184,.35)"></td>
@@ -967,9 +967,40 @@
                 <button type="submit"
                         style="margin-top:16px;padding:11px 20px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">저장</button>
             </form>
-        </div>
 
-        <!-- Settings Tab -->
+            <h2 style="margin:22px 0 12px;font-size:17px">파트너 숨김 채널</h2>
+            <div style="border:1px solid rgba(148,163,184,.25);border-radius:14px;padding:16px">
+                <form method="post" action="/dashboard/partner-hide/add" style="display:flex;gap:8px;margin-bottom:12px">
+                    <input name="channel_id" placeholder="숨길 채널 ID (예: 1567475876096905318)" maxlength="25"
+                           style="flex:1;padding:10px;border-radius:8px;border:1px solid rgba(148,163,184,.35)">
+                    <button type="submit"
+                            style="padding:10px 16px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">추가</button>
+                </form>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+                    {% for cid in partner_hide_channels %}
+                    <form method="post" action="/dashboard/partner-hide/remove" style="margin:0">
+                        <input type="hidden" name="channel_id" value="{{ cid }}">
+                        <button type="submit" title="클릭하면 목록에서 제거"
+                                style="padding:6px 10px;border-radius:8px;border:1px solid rgba(148,163,184,.35);background:rgba(148,163,184,.12);font-size:12px;cursor:pointer">
+                            <i class="fas fa-hashtag"></i> {{ cid }} &nbsp;✕
+                        </button>
+                    </form>
+                    {% else %}
+                    <span style="opacity:.6;font-size:13px">등록된 채널이 없습니다.</span>
+                    {% endfor %}
+                </div>
+                <form method="post" action="/dashboard/partner-hide/apply" style="margin:0">
+                    <button type="submit"
+                            style="padding:10px 16px;border:0;border-radius:8px;background:#059669;color:#fff;font-weight:700;cursor:pointer">
+                        권한 즉시 재적용 ({{ partner_hide_channels|length }}개 채널)
+                    </button>
+                </form>
+                <div style="margin-top:10px;font-size:12px;opacity:.7">
+                    파트너 알림을 끈 사람에게 <b>파트너 알림 차단</b> 역할이 붙고, 위 채널들이 숨겨집니다.<br>
+                    채널은 삭제되지 않고 <b>보기 권한만</b> 제거됩니다. 예외 채널(파트너 패널)은 계속 보입니다.
+                </div>
+            </div>
+        </div>
         <div class="tab-content" id="tab-settings">
 <div style="margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,.12)">
   <h3 style="margin:0 0 10px">시스템</h3>

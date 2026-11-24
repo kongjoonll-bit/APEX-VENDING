@@ -1278,42 +1278,51 @@ class VendingBot(commands.Bot):
         if not blk:
             return sub, blk
 
-        # 숨기지 않을 채널 (파트너 패널들)
-        keep_ids = set()
-        raw = str(db.get_setting('partner_panel_channel_ids', '') or '')
-        for token in raw.replace(';', ',').replace(' ', ',').split(','):
-            token = token.strip()
-            if token.isdigit():
-                keep_ids.add(token)
-        extra = str(db.get_setting('partner_panel_channel_id', '') or '').strip()
-        if extra.isdigit():
-            keep_ids.add(extra)
+        def _ids(key):
+            out = set()
+            raw = str(db.get_setting(key, '') or '')
+            for token in raw.replace('\n', ' ').replace(',', ' ').replace(';', ' ').split():
+                token = token.strip()
+                if token.isdigit():
+                    out.add(token)
+            return out
 
-        # 파트너 카테고리의 '채널 하나하나'에 보기 권한 적용 (채널 삭제 없음)
-        cat_id = str(db.get_setting('partner_category_id', '') or '').strip()
-        cat = guild.get_channel(int(cat_id)) if cat_id.isdigit() else None
+        keep_ids = _ids('partner_panel_channel_ids') | _ids('partner_panel_channel_id')
+        hide_ids = _ids('partner_hide_channel_ids') - keep_ids
+
         changed = 0
-        if isinstance(cat, discord.CategoryChannel):
-            try:
-                await cat.set_permissions(blk, view_channel=False,
-                                          reason='파트너 알림 미수신 → 카테고리 숨김')
-            except Exception as e:
-                logger.warning(f"[PARTNER] 카테고리 권한 실패: {e}")
-
-            for ch in list(cat.channels):
-                allow = str(ch.id) in keep_ids
+        # 1) 지정 채널 숨김 (채널 삭제 없음 · 권한만 변경)
+        for cid in sorted(hide_ids):
+            ch = guild.get_channel(int(cid))
+            if ch is None:
                 try:
-                    ow = ch.overwrites_for(blk)
-                    if ow.view_channel is not allow:
-                        await ch.set_permissions(
-                            blk, view_channel=allow,
-                            reason=('파트너 패널 채널 예외' if allow
-                                    else '파트너 알림 미수신 → 채널 숨김'))
-                        changed += 1
-                except Exception as e:
-                    logger.warning(f"[PARTNER] 채널 권한 실패 {ch.name}: {e}")
-        logger.info(f"[PARTNER] 채널 권한 적용 {changed}개 · 예외 {len(keep_ids)}개")
+                    ch = await guild.fetch_channel(int(cid))
+                except Exception:
+                    continue
+            try:
+                ow = ch.overwrites_for(blk)
+                if ow.view_channel is not False:
+                    await ch.set_permissions(blk, view_channel=False,
+                                              reason='파트너 알림 미수신 → 채널 숨김')
+                    changed += 1
+            except Exception as e:
+                logger.warning(f"[PARTNER] 숨김 실패 {cid}: {e}")
 
+        # 2) 예외 채널은 항상 보이게
+        for cid in sorted(keep_ids):
+            ch = guild.get_channel(int(cid))
+            if ch is None:
+                continue
+            try:
+                ow = ch.overwrites_for(blk)
+                if ow.view_channel is not True:
+                    await ch.set_permissions(blk, view_channel=True,
+                                              reason='파트너 패널 채널 예외')
+                    changed += 1
+            except Exception as e:
+                logger.warning(f"[PARTNER] 예외 적용 실패 {cid}: {e}")
+
+        logger.info(f"[PARTNER] 권한 적용 {changed}건 · 숨김 {len(hide_ids)}개 · 예외 {len(keep_ids)}개")
         return sub, blk
 
     async def apply_tier_role(self, user_id):

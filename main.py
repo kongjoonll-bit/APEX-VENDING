@@ -539,6 +539,12 @@ def dashboard():
             'role_id': settings.get(f'tier{_i}_role_id', ''),
         }
 
+    # 파트너 숨김 채널 목록 (대시보드 관리)
+    partner_hide_channels = [
+        t for t in str(settings.get('partner_hide_channel_ids', '') or '')
+        .replace('\n', ' ').replace(',', ' ').replace(';', ' ').split() if t.isdigit()
+    ]
+
     return render_template('dashboard.html',
         stats=stats,
         total_revenue=total_revenue,
@@ -552,7 +558,8 @@ def dashboard():
         charge_expire_minutes=charge_expire_minutes,
         stock_requests=stock_requests,
         open_stock_requests=open_stock_requests,
-        tier_cfg=tier_cfg
+        tier_cfg=tier_cfg,
+        partner_hide_channels=partner_hide_channels
     )
 
 # ============ API ROUTES ============
@@ -1374,6 +1381,47 @@ def dashboard_tiers():
                    'true' if request.form.get('stock_notice_mention_role') else 'false')
     db.set_setting('charge_log_enabled',
                    'true' if request.form.get('charge_log_enabled') else 'false')
+    return redirect('/dashboard')
+
+
+@app.route('/dashboard/partner-hide/add', methods=['POST'])
+@login_required
+def dashboard_partner_hide_add():
+    """파트너 숨김 채널 추가"""
+    cid = (request.form.get('channel_id') or '').strip()
+    if not cid.isdigit():
+        return redirect('/dashboard')
+    raw = str(db.get_setting('partner_hide_channel_ids', '') or '')
+    ids = [t for t in raw.replace('\n', ' ').replace(',', ' ').replace(';', ' ').split() if t.isdigit()]
+    if cid not in ids:
+        ids.append(cid)
+        db.set_setting('partner_hide_channel_ids', ' '.join(ids))
+    return redirect('/dashboard')
+
+
+@app.route('/dashboard/partner-hide/remove', methods=['POST'])
+@login_required
+def dashboard_partner_hide_remove():
+    """파트너 숨김 채널 제거"""
+    cid = (request.form.get('channel_id') or '').strip()
+    raw = str(db.get_setting('partner_hide_channel_ids', '') or '')
+    ids = [t for t in raw.replace('\n', ' ').replace(',', ' ').replace(';', ' ').split()
+           if t.isdigit() and t != cid]
+    db.set_setting('partner_hide_channel_ids', ' '.join(ids))
+    return redirect('/dashboard')
+
+
+@app.route('/dashboard/partner-hide/apply', methods=['POST'])
+@login_required
+def dashboard_partner_hide_apply():
+    """파트너 채널 권한 즉시 재적용 (봇이 온라인이면)"""
+    try:
+        if _bot_online() and bot.is_ready():
+            loop = _bot_loop()
+            for guild in bot.guilds:
+                asyncio.run_coroutine_threadsafe(bot.ensure_partner_roles(guild), loop)
+    except Exception as e:
+        logger.warning(f"[PARTNER] 대시보드 재적용 실패: {e}")
     return redirect('/dashboard')
 
 
