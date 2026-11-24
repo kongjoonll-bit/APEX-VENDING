@@ -186,7 +186,7 @@ def build_key_attachment(key):
     data = key.get('file_data')
     if not data:
         return None
-    name = (key.get('file_name') or '').strip() or 'APEX-%s.txt' % key.get('id', 'file')
+    name = db.stock_file_name((key.get('file_name') or '').strip() or 'file.txt')
     return discord.File(io.BytesIO(bytes(data)), filename=name)
 
 
@@ -196,7 +196,7 @@ def add_key_fields_to_embed(embed, key):
     if key_file:
         embed.add_field(
             name="전달 파일",
-            value=f"`{key.get('file_name') or 'file'}` · {human_size(key.get('file_size'))}",
+            value=f"`{db.stock_file_name((key.get('file_name') or '').strip() or 'file.txt')}` · {human_size(key.get('file_size'))}",
             inline=False
         )
         if (key.get('key_value') or '').strip():
@@ -369,6 +369,12 @@ class VendingBot(commands.Bot):
         # → 배포 겹침(구/신 인스턴스 동시 접속)이나 중복 실행 시 발생하는
         #   NotFound(10062, Unknown interaction)가 트레이스백으로 터지지 않게 한다.
         self.tree.on_error = self.on_app_command_error
+        # 영구 UI 패널 등록 (봇 재시작 후에도 버튼이 동작하도록)
+        for _view in (StockPingView(), StockRequestView()):
+            try:
+                self.add_view(_view)
+            except Exception as _e:
+                logger.warning(f"[UI] 패널 등록 실패: {_e}")
         # 커맨드 구성이 바뀌지 않았다면 sync 를 건너뛴다 (부팅 시 API 호출 절감 → 429 예방)
         try:
             import time as _t
@@ -873,8 +879,53 @@ class VendingBot(commands.Bot):
             await self.handle_charge_receipt_dm(message)
             return
 
+        # 재고 요청 채널 자동 접수
+        try:
+            req_cid = str(db.get_setting('stock_request_channel_id', '') or '').strip()
+            if req_cid and str(message.channel.id) == req_cid:
+                if not (message.content or '').startswith(('/', '!', '?')):
+                    await self.handle_stock_request(message)
+                    return
+        except Exception as e:
+            logger.error(f"[재고요청] 처리 실패: {e}")
+
         # 일반 메시지 처리 (DM 포함 - 일반 채팅은 리뷰로 등록하지 않음)
         await self.process_commands(message)
+
+    async def handle_stock_request(self, message):
+        """재고 요청 채널: 즉시 접수 답장 + DB 저장(관리자 대시보드 표시)"""
+        content = (message.content or '').strip()
+        author_name = getattr(message.author, 'display_name', None) or message.author.name
+        rid = db.create_stock_request(
+            message.author.id, author_name, content,
+            channel_id=message.channel.id, message_id=message.id,
+            product_hint=content[:120])
+
+        embed = discord.Embed(
+            title="재고 요청 접수",
+            description=(f"{message.author.mention} 님의 요청이 접수되었습니다.\n"
+                         f"> {content[:300] or '(내용 없음)'}\n\n"
+                         "확인 후 **입고되면 알림**으로 알려드립니다."),
+            color=brand_color('main'))
+        embed.set_footer(text=f"요청 #{rid} · {brand_tag('STOCK')}")
+
+        try:
+            await message.reply(embed=embed, mention_author=False)
+        except Exception:
+            try:
+                await message.channel.send(embed=embed)
+            except Exception:
+                pass
+
+        try:
+            admin_ch = await self.get_admin_alert_channel()
+            if admin_ch:
+                await admin_ch.send(
+                    f"📥 **재고 요청 #{rid}** · {author_name} · <#{message.channel.id}>\n"
+                    f"> {content[:200] or '(내용 없음)'}")
+        except Exception:
+            pass
+        logger.info(f"[재고요청] #{rid} 접수: {content[:60]}")
 
     async def get_charge_log_channel(self):
         """충전로그 채널 반환 (설정 키: charge_log_channel_id → 없으면 deposit_log_channel_id → admin_channel_id)"""
@@ -925,6 +976,11 @@ class VendingBot(commands.Bot):
         # 증거 이미지 URL 저장
         db.set_charge_receipt_image(req['id'], attachment.url)
         await message.channel.send("입금 증거 스크린샷이 접수되었습니다! 관리자가 확인 후 승인하면 포인트가 충전됩니다 ")
+
+        # 충전로그 채널 게시 여부 (대시보드 설정: charge_log_enabled)
+        if str(db.get_setting('charge_log_enabled', 'false')).strip().lower() != 'true':
+            logger.info(f"[충전로그] #{req['id']} 증거 접수됨 (로그 전송 꺼짐)")
+            return
 
         # 충전로그 채널에 게시
         channel, err = await self.get_charge_log_channel()
@@ -1144,6 +1200,52 @@ class VendingBot(commands.Bot):
             logger.warning(f"[VENDING] 히스토리 검색 실패 채널 {channel.id}: {e}")
         return None
     
+    async def apply_tier_role(self, user_id):
+        """누적구매 티어에 맞는 역할 자동 지급 (+ 하위 티어 역할 정리)"""
+        try:
+            tier = db.get_user_tier(user_id)
+        except Exception:
+            return None
+        if not tier:
+            return None
+
+        role_ids = []
+        for i in (1, 2, 3):
+            rid = str(db.get_setting(f'tier{i}_role_id', '') or '').strip()
+            if rid.isdigit():
+                role_ids.append((i, int(rid)))
+        if not role_ids:
+            return tier
+
+        for guild in self.guilds:
+            try:
+                member = guild.get_member(int(user_id))
+            except Exception:
+                member = None
+            if not member:
+                continue
+
+            target = None
+            for i, rid in role_ids:
+                role = guild.get_role(rid)
+                if not role:
+                    continue
+                if i == tier['tier']:
+                    target = role
+                elif role in member.roles:
+                    try:
+                        await member.remove_roles(role, reason="티어 변경")
+                    except Exception:
+                        pass
+            if target and target not in member.roles:
+                try:
+                    await member.add_roles(target, reason=f"누적구매 {tier['purchases']}건 · 티어{tier['tier']}")
+                    logger.info(f"[TIER] {member} → 티어{tier['tier']} ({tier['discount']}% 할인)")
+                except Exception as e:
+                    logger.warning(f"[TIER] 역할 부여 실패: {e}")
+            return tier
+        return tier
+
     async def grant_purchase_role(self, member, product_name=None):
         """구매 완료 시 지정된 역할 자동 지급"""
         role_id = db.get_setting('purchase_role_id', '')
@@ -1247,6 +1349,12 @@ class VendingBot(commands.Bot):
         
         db.update_order_status(order_id, 'completed', key_id=key['id'])
         
+        # 누적구매 티어 역할 자동 지급
+        try:
+            await self.apply_tier_role(order['user_id'])
+        except Exception as e:
+            logger.warning(f"[TIER] 역할 지급 실패: {e}")
+
         embed = discord.Embed(
             title="구매 완료",
             description=f"**{order['product_name']}** 구매가 완료되었습니다!",
@@ -1339,7 +1447,7 @@ class VendingBot(commands.Bot):
                     logger.error(f"Refresh vending machine error: {e}")
             logger.info("[VENDING] Vending machines refreshed")
     
-    async def send_stock_notice(self, product, key_count):
+    async def send_stock_notice(self, product, key_count, extra_note=''):
         """재고(키) 입고 시 입고 채널에 카드 이미지 + 임베드 전송"""
         stock_channel_id = db.get_setting('stock_channel_id', '')
         if not stock_channel_id:
@@ -1358,15 +1466,35 @@ class VendingBot(commands.Bot):
                 return
 
             total_stock = db.count_available_keys(product['id'])
+
+            # 채널 안내 문구 (실시간재고 / 재고요청)
+            live_ref = f"<#{stock_channel_id}>"
+            req_cid = db.get_setting('stock_request_channel_id', '')
+            req_ref = f"<#{req_cid}>" if req_cid else "재고요청 채널"
+
+            # 핑: 재고핑 역할 + 최근 요청자
+            mention_parts = []
+            role_id = str(db.get_setting('stock_ping_role_id', '') or '').strip()
+            if role_id and str(db.get_setting('stock_notice_mention_role', 'true')).lower() == 'true':
+                mention_parts.append(f"<@&{role_id}>")
+            try:
+                for r in db.get_recent_requesters(days=14, limit=4):
+                    uid = str(r.get('user_id') or '').strip()
+                    if uid:
+                        mention_parts.append(f"<@{uid}>")
+            except Exception:
+                pass
+            mention_text = " ".join(mention_parts)
+
+            desc = f"{live_ref}\n\n원하는 쿠키가 있다면 {req_ref}"
+            if extra_note:
+                desc += f"\n\n> {extra_note}"
+
             embed = discord.Embed(
-                title="재고 입고 완료!",
-                description=f"**{product['name']}** 재고가 입고되었습니다!",
+                title=f"{product['name']} {key_count}개 입고완료",
+                description=desc,
                 color=brand_color('success')
             )
-            embed.add_field(name="입고 수량", value=f"**+{key_count}개**", inline=True)
-            embed.add_field(name="현재 재고", value=f"**{total_stock}개**", inline=True)
-            embed.add_field(name="가격", value=f"**{product['price']:,}원**", inline=True)
-            embed.set_footer(text=brand_tag('RESTOCK'))
 
             # 카드 이미지 생성 (실패하면 임베드만 전송)
             file = None
@@ -1389,9 +1517,9 @@ class VendingBot(commands.Bot):
                 logger.warning(f"[입고알림] 카드 생성 실패: {e}")
 
             if file:
-                await channel.send(embed=embed, file=file)
+                await channel.send(content=mention_text or None, embed=embed, file=file)
             else:
-                await channel.send(embed=embed)
+                await channel.send(content=mention_text or None, embed=embed)
             logger.info(f"[입고알림] 전송 완료: {product['name']} +{key_count}개 (채널 {stock_channel_id})")
         except Exception as e:
             logger.error(f"Stock notice error: {e}")
@@ -1668,6 +1796,169 @@ class VendingMainView(ui.LayoutView):
 
         container = ui.Container(*children, accent_color=accent)
         self.add_item(container)
+
+
+class StockPingButton(discord.ui.Button):
+    """재고핑(입고 알림) 역할 구독/해지"""
+
+    def __init__(self, enable=True, row=0):
+        super().__init__(
+            label="알림 받기" if enable else "알림 끄기",
+            emoji="🔔" if enable else "🔕",
+            style=discord.ButtonStyle.success if enable else discord.ButtonStyle.secondary,
+            custom_id="stockping_on" if enable else "stockping_off",
+            row=row,
+        )
+        self.enable = enable
+
+    async def callback(self, interaction: discord.Interaction):
+        role_id = str(db.get_setting('stock_ping_role_id', '') or '').strip()
+        if not role_id:
+            await interaction.response.send_message(
+                "재고 알림 역할이 아직 설정되지 않았습니다. 관리자에게 문의해주세요.", ephemeral=True)
+            return
+        guild = interaction.guild
+        role = guild.get_role(int(role_id)) if (guild and role_id.isdigit()) else None
+        if not role:
+            await interaction.response.send_message("알림 역할을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        member = interaction.user
+        try:
+            if self.enable:
+                if role in member.roles:
+                    await interaction.response.send_message(
+                        f"이미 {role.mention} 알림을 받고 있습니다.", ephemeral=True)
+                    return
+                await member.add_roles(role, reason="재고 알림 구독")
+                await interaction.response.send_message(
+                    f"{role.mention} 알림을 켰습니다.\n입고되는 순간 가장 먼저 알려드릴게요.", ephemeral=True)
+            else:
+                if role not in member.roles:
+                    await interaction.response.send_message("현재 알림을 받고 있지 않습니다.", ephemeral=True)
+                    return
+                await member.remove_roles(role, reason="재고 알림 해지")
+                await interaction.response.send_message("재고 알림을 껐습니다.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "역할을 변경할 권한이 없습니다. 봇 역할을 알림 역할보다 위로 올려주세요.", ephemeral=True)
+
+
+class StockPingView(ui.LayoutView):
+    """재고 알림(재고핑) 구독 패널"""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        role_id = str(db.get_setting('stock_ping_role_id', '') or '').strip()
+        role_line = f"<@&{role_id}>" if role_id else "미설정"
+
+        children = [
+            ui.TextDisplay("# 재고 알림"),
+            ui.Separator(),
+            ui.TextDisplay("새 쿠키가 **입고되는 순간** 가장 먼저 알림을 받습니다.\n"
+                           "필요할 때 켜고, 언제든 끌 수 있어요."),
+            ui.ActionRow(StockPingButton(True), StockPingButton(False)),
+            ui.Separator(),
+            ui.TextDisplay(f"-# 구독 역할 · {role_line}"),
+        ]
+        self.add_item(ui.Container(*children, accent_color=brand_color('main')))
+
+
+class StockRequestModal(discord.ui.Modal, title="재고 요청"):
+    product = discord.ui.TextInput(
+        label="원하는 상품",
+        placeholder="예: 배구전설쿠키 / 100로벅 이상 쿠키",
+        max_length=100,
+    )
+    detail = discord.ui.TextInput(
+        label="추가 설명 (선택)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=500,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        hint = str(self.product.value).strip()
+        content = f"{hint} / {str(self.detail.value or '').strip()}".strip(' /')
+        try:
+            rid = db.create_stock_request(
+                interaction.user.id,
+                getattr(interaction.user, 'display_name', interaction.user.name),
+                content, channel_id=str(interaction.channel_id or ''),
+                product_hint=hint,
+            )
+        except Exception as e:
+            logger.error(f"[재고요청] 저장 실패: {e}")
+            await interaction.response.send_message("요청 저장에 실패했습니다.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="재고 요청 접수",
+            description=f"> {hint}\n\n요청이 접수되었습니다. **입고되면 알림**으로 알려드릴게요.",
+            color=brand_color('main'))
+        embed.set_footer(text=f"요청 #{rid}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        try:
+            ch = await interaction.client.get_admin_alert_channel()
+            if ch:
+                await ch.send(f"📥 **재고 요청 #{rid}** · "
+                              f"{getattr(interaction.user, 'display_name', interaction.user.name)}"
+                              f"\n> {content[:200]}")
+        except Exception:
+            pass
+
+
+class StockRequestOpenButton(discord.ui.Button):
+    def __init__(self, row=0):
+        super().__init__(label="요청하기", emoji="📝", style=discord.ButtonStyle.primary,
+                         custom_id="stockreq_open", row=row)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(StockRequestModal())
+
+
+class StockRequestListButton(discord.ui.Button):
+    def __init__(self, row=0):
+        super().__init__(label="내 요청", emoji="📋", style=discord.ButtonStyle.secondary,
+                         custom_id="stockreq_mine", row=row)
+
+    async def callback(self, interaction: discord.Interaction):
+        rows = [r for r in db.get_stock_requests(limit=50)
+                if str(r.get('user_id')) == str(interaction.user.id)]
+        if not rows:
+            await interaction.response.send_message("아직 요청하신 내역이 없습니다.", ephemeral=True)
+            return
+        lines = []
+        for r in rows[:8]:
+            mark = "✅" if r.get('status') == 'done' else "⏳"
+            lines.append(f"{mark} `#{r['id']}` {(r.get('product_hint') or r.get('content') or '')[:60]}")
+        await interaction.response.send_message(
+            "**내 재고 요청**\n" + "\n".join(lines) + "\n\n-# ✅ 입고완료 · ⏳ 대기중", ephemeral=True)
+
+
+class StockRequestView(ui.LayoutView):
+    """재고 요청 패널"""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        try:
+            waiting = db.count_open_stock_requests()
+        except Exception:
+            waiting = 0
+        cid = str(db.get_setting('stock_request_channel_id', '') or '').strip()
+        req_ref = f"<#{cid}>" if cid.isdigit() else "이 채널"
+
+        children = [
+            ui.TextDisplay("# 재고 요청"),
+            ui.Separator(),
+            ui.TextDisplay("찾으시는 쿠키가 없다면 **요청**을 남겨주세요.\n"
+                           "입고되는 즉시 알림으로 알려드립니다."),
+            ui.ActionRow(StockRequestOpenButton(), StockRequestListButton()),
+            ui.Separator(),
+            ui.TextDisplay(f"대기 중인 요청 **{waiting}건** · 요청 채널 {req_ref}"),
+        ]
+        self.add_item(ui.Container(*children, accent_color=brand_color('main')))
 
 
 class CategorySelect(discord.ui.Select):
@@ -2559,9 +2850,15 @@ class ConfirmBuyButton(discord.ui.Button):
         self.is_confirm = confirm
         self.coupon = coupon
     
-    def get_final_price(self):
-        """쿠폰 할인이 적용된 최종 가격"""
+    def get_final_price(self, user_id=None):
+        """누적구매 티어 할인 + 쿠폰 할인이 적용된 최종 가격"""
         price = self.product['price']
+        try:
+            rate = db.get_tier_discount(user_id) if user_id else 0
+            if rate:
+                price = max(0, round(price * (100 - rate) / 100))
+        except Exception:
+            pass
         if self.coupon:
             price = max(0, price - self.coupon['discount_amount'])
         return price
@@ -2572,7 +2869,7 @@ class ConfirmBuyButton(discord.ui.Button):
             return
         
         # Double check balance and stock (쿠폰 할인 적용 가격 기준)
-        final_price = self.get_final_price()
+        final_price = self.get_final_price(interaction.user.id)
         balance = db.get_balance(str(interaction.user.id))
         if balance < final_price:
             await interaction.response.edit_message(
@@ -2701,11 +2998,27 @@ class ConfirmBuyButton(discord.ui.Button):
         
         # Send purchase log to purchase log channel
         from datetime import datetime
-        purchase_log_channel_id = db.get_setting('purchase_log_channel_id', '')
-        if purchase_log_channel_id and interaction.client.is_ready():
+        purchase_log_channel_id = str(db.get_setting('purchase_log_channel_id', '') or '').strip()
+        if purchase_log_channel_id.isdigit():
             try:
                 channel = interaction.client.get_channel(int(purchase_log_channel_id))
+                if channel is None:
+                    # 캐시에 없을 때 API 직접 조회 (재시작 직후·권한 변경 시 누락 방지)
+                    channel = await interaction.client.fetch_channel(int(purchase_log_channel_id))
                 if channel:
+                    if not card_png:
+                        # 신규 상품(카테고리 미지정 등)으로 카드가 없을 때 재시도
+                        try:
+                            card_png = await render_purchase_card(
+                                self.product['name'],
+                                (self.product.get('category') or 'COOKIE'),
+                                final_price, interaction.user.name, order_id,
+                                str(interaction.user.id),
+                                description=self.product.get('description', ''))
+                        except Exception as _ce:
+                            logger.warning(f"[구매로그] 카드 재생성 실패: {_ce}")
+                            card_png = None
+
                     embed_log = discord.Embed(
                         title="구매 완료",
                         description=f"**{interaction.user.name}** 님이 상품을 구매했습니다!",
@@ -2746,6 +3059,13 @@ class ConfirmBuyButton(discord.ui.Button):
         
         # Refresh vending machine stock
         await interaction.client.refresh_vending_machines()
+
+        # 실시간 재고 보드 즉시 갱신 (구매 직후 반영)
+        try:
+            db.set_setting('stock_board_refresh_req', '1')
+            await interaction.client.refresh_stock_board()
+        except Exception as e:
+            logger.warning(f"[재고보드] 즉시 갱신 실패: {e}")
 
 
 class CouponApplyButton(discord.ui.Button):
@@ -3254,6 +3574,77 @@ class VendingCommands(commands.Cog):
         
         # 입고 채널에 공지 전송
         await self.bot.send_stock_notice(product, count)
+
+    @app_commands.command(name="재고알림패널", description="[관리자] 재고 알림(재고핑) 구독 패널을 게시합니다")
+    async def stock_ping_panel(self, interaction: discord.Interaction):
+        if not self.is_admin_check(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+        try:
+            await interaction.channel.send(view=StockPingView())
+        except Exception as e:
+            logger.error(f"[패널] 재고알림 게시 실패: {e}")
+            await interaction.response.send_message(f"게시 실패: {e}", ephemeral=True)
+            return
+        await interaction.response.send_message("재고 알림 패널을 게시했습니다.", ephemeral=True)
+
+    @app_commands.command(name="재고요청패널", description="[관리자] 재고 요청 패널을 게시합니다")
+    async def stock_request_panel(self, interaction: discord.Interaction):
+        if not self.is_admin_check(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+        try:
+            await interaction.channel.send(view=StockRequestView())
+        except Exception as e:
+            logger.error(f"[패널] 재고요청 게시 실패: {e}")
+            await interaction.response.send_message(f"게시 실패: {e}", ephemeral=True)
+            return
+        await interaction.response.send_message("재고 요청 패널을 게시했습니다.", ephemeral=True)
+
+    @app_commands.command(name="입고", description="[관리자] 입고 알림을 전송합니다 (재고 수량 변경 없음)")
+    @app_commands.describe(product="상품 ID 또는 이름", count="입고 수량", note="추가 안내 문구 (선택)")
+    async def stock_in_notice(self, interaction: discord.Interaction, product: str,
+                              count: int = 1, note: str = ""):
+        if not self.is_admin_check(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        prod = None
+        key = (product or '').strip()
+        if key.isdigit():
+            prod = db.get_product(int(key))
+        if not prod and key:
+            matches = [p for p in db.get_products() if key.lower() in (p['name'] or '').lower()]
+            if len(matches) == 1:
+                prod = matches[0]
+            elif len(matches) > 1:
+                names = "\n".join(f"`{p['id']}` {p['name']}" for p in matches[:10])
+                await interaction.response.send_message(
+                    f"상품이 여러 개 검색되었습니다. ID로 다시 지정해주세요.\n{names}", ephemeral=True)
+                return
+        if not prod:
+            await interaction.response.send_message("상품을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await self.bot.send_stock_notice(prod, max(1, int(count)), extra_note=note)
+
+        # 같은 상품을 기다리던 재고 요청은 자동 마감
+        closed = 0
+        try:
+            for req in db.get_stock_requests(status='open', limit=100):
+                blob = f"{req.get('content') or ''} {req.get('product_hint') or ''}".lower()
+                token = (prod['name'] or '').lower()
+                if token and (token in blob or token[:4] in blob):
+                    db.mark_stock_request_done(req['id'], handled_by=str(interaction.user.id))
+                    closed += 1
+        except Exception as e:
+            logger.warning(f"[입고] 요청 자동 마감 실패: {e}")
+
+        msg = f"**{prod['name']}** {count}개 입고 알림을 전송했습니다."
+        if closed:
+            msg += f"\n관련 재고 요청 **{closed}건**을 완료 처리했습니다."
+        await interaction.followup.send(msg, ephemeral=True)
     
     @app_commands.command(name="파일추가", description="[관리자] 상품에 파일(txt 등)을 재고로 추가합니다 (파일 1개 = 재고 1개)")
     @app_commands.describe(

@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import re
 import json
 import time
 from datetime import datetime
@@ -57,6 +58,16 @@ DEFAULT_SETTINGS = {
     'cookie_max_age_minutes': '10',
     'charge_expire_minutes': '5',
     'deposit_webhook_key': '071763f7a8c9b6e37efef24be2fdb5e9',
+    # ── 충전로그/입고알림 ──
+    'charge_log_enabled': 'false',           # 충전로그 채널 전송 여부
+    'stock_ping_role_id': '',                # 재고핑 역할
+    'stock_request_channel_id': '',          # 재고요청 채널
+    'stock_notice_mention_role': 'true',     # 입고알림에 재고핑 역할 멘션
+    # ── 누적구매 티어(할인/역할) ──
+    'tier_enabled': 'false',
+    'tier1_count': '3',   'tier1_role_id': '', 'tier1_discount': '3',
+    'tier2_count': '10',  'tier2_role_id': '', 'tier2_discount': '5',
+    'tier3_count': '30',  'tier3_role_id': '', 'tier3_discount': '10',
 }
 
 def get_conn():
@@ -222,6 +233,61 @@ def init_db():
             print(f"[DB] 기본 상품 {_seeded}개 자동 복원 완료")
     except Exception as _e:
         print(f"[DB] 기본 상품 시드 건너뜀: {_e}")
+
+# ============ 재고 텍스트 정리 ============
+# 재고 파일 맨 앞에 붙는 안내문을 자동 제거한다.
+#   예) "Инструкция - @cookiestock_faq"
+_NOISE_MARKERS = ('инструкция', 'cookiestock_faq', 'instrukciya')
+_NOISE_SCAN_LINES = 6          # 상단 몇 줄까지만 검사
+STOCK_BRAND_NAME = 'Apex로블쿠키'   # 안내문 대체 문구 / 지급 파일명
+
+
+def stock_file_name(original_name: str, fallback_ext: str = '.txt') -> str:
+    """재고 파일 지급 시 사용할 파일명 → 'Apex로블쿠키.txt'"""
+    name = (original_name or '').strip()
+    if name.startswith(STOCK_BRAND_NAME):
+        return name
+    ext = os.path.splitext(name)[1].lower()
+    if not re.fullmatch(r'\.[a-z0-9]{1,8}', ext):
+        ext = fallback_ext
+    return f"{STOCK_BRAND_NAME}{ext}"
+
+
+def strip_stock_header_text(text: str) -> str:
+    """재고 텍스트 상단의 안내문을 브랜드명(Apex로블쿠키)으로 교체"""
+    if not text:
+        return text
+    lines = text.splitlines()
+    kept = []
+    replaced = False
+    for i, line in enumerate(lines):
+        low = line.strip().lower()
+        if (not replaced and i < _NOISE_SCAN_LINES and low
+                and any(m in low for m in _NOISE_MARKERS)):
+            kept.append(STOCK_BRAND_NAME)
+            replaced = True
+            continue
+        if (replaced and i < _NOISE_SCAN_LINES and low
+                and any(m in low for m in _NOISE_MARKERS)):
+            continue      # 중복 안내문 라인은 제거
+        kept.append(line)
+    cleaned = '\n'.join(kept)
+    if text.endswith('\n'):
+        cleaned += '\n'
+    return cleaned
+
+
+def strip_stock_header_bytes(data: bytes) -> bytes:
+    """재고 파일 바이트에서 안내문 제거 (텍스트 파일만, 바이너리는 그대로)"""
+    if not data:
+        return data
+    try:
+        text = bytes(data).decode('utf-8')
+    except (UnicodeDecodeError, AttributeError):
+        return data
+    cleaned = strip_stock_header_text(text)
+    return cleaned.encode('utf-8') if cleaned != text else data
+
 
 # ============ SETTINGS ============
 def get_setting(key, default=None):
@@ -410,7 +476,7 @@ def add_keys(product_id, key_list):
     c = conn.cursor()
     count = 0
     for k in key_list:
-        k = (k or '').strip()
+        k = strip_stock_header_text((k or '').strip())
         if not k:
             continue
         c.execute('INSERT INTO keys (product_id, key_value) VALUES (?, ?)', (product_id, k))
@@ -437,7 +503,8 @@ def add_key_files(product_id, files):
             continue
         if not data:
             continue
-        name = (name or '').strip() or 'file.txt'
+        name = stock_file_name((name or '').strip() or 'file.txt')
+        data = strip_stock_header_bytes(data)
         c.execute(
             'INSERT INTO keys (product_id, key_value, file_name, file_data, file_size) '
             'VALUES (?, ?, ?, ?, ?)',
@@ -1117,6 +1184,134 @@ def get_user_charge_requests(user_id, limit=10):
     rows = c.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+# ============ STOCK REQUESTS (재고 요청) ============
+def _ensure_stock_request_table(c):
+    c.execute('''CREATE TABLE IF NOT EXISTS stock_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        username TEXT NOT NULL,
+        channel_id TEXT DEFAULT '',
+        message_id TEXT DEFAULT '',
+        content TEXT DEFAULT '',
+        product_hint TEXT DEFAULT '',
+        status TEXT DEFAULT 'open',
+        handled_by TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        handled_at TEXT DEFAULT NULL
+    )''')
+
+
+def create_stock_request(user_id, username, content, channel_id='', message_id='', product_hint=''):
+    """재고 요청 접수 → 요청 id"""
+    conn = get_conn()
+    c = conn.cursor()
+    _ensure_stock_request_table(c)
+    c.execute(
+        'INSERT INTO stock_requests (user_id, username, channel_id, message_id, content, product_hint) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        (str(user_id), username, str(channel_id or ''), str(message_id or ''),
+         (content or '')[:1500], (product_hint or '')[:120])
+    )
+    conn.commit()
+    rid = c.lastrowid
+    conn.close()
+    return rid
+
+
+def get_stock_requests(status=None, limit=50):
+    conn = get_conn()
+    c = conn.cursor()
+    _ensure_stock_request_table(c)
+    if status:
+        c.execute('SELECT * FROM stock_requests WHERE status=? ORDER BY id DESC LIMIT ?',
+                  (status, int(limit)))
+    else:
+        c.execute('SELECT * FROM stock_requests ORDER BY id DESC LIMIT ?', (int(limit),))
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def count_open_stock_requests():
+    conn = get_conn()
+    c = conn.cursor()
+    _ensure_stock_request_table(c)
+    c.execute("SELECT COUNT(*) AS n FROM stock_requests WHERE status='open'")
+    row = c.fetchone()
+    conn.close()
+    return int(row['n']) if row else 0
+
+
+def mark_stock_request_done(request_id, handled_by=''):
+    conn = get_conn()
+    c = conn.cursor()
+    _ensure_stock_request_table(c)
+    c.execute("UPDATE stock_requests SET status='done', handled_by=?, handled_at=CURRENT_TIMESTAMP "
+              "WHERE id=?", (str(handled_by or ''), int(request_id)))
+    conn.commit()
+    conn.close()
+
+
+def get_recent_requesters(days=14, limit=5):
+    """최근 재고요청자 목록 (입고 알림 핑용) — 중복 제거, 최신순"""
+    conn = get_conn()
+    c = conn.cursor()
+    _ensure_stock_request_table(c)
+    c.execute(
+        "SELECT user_id, MAX(username) AS username, MAX(created_at) AS last_at "
+        "FROM stock_requests WHERE created_at >= datetime('now', ?) "
+        "GROUP BY user_id ORDER BY last_at DESC LIMIT ?",
+        (f'-{int(days)} days', int(limit))
+    )
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ============ PURCHASE TIERS (누적구매 역할/할인) ============
+def get_purchase_count(user_id):
+    """누적 구매(확정/완료) 건수"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) AS n FROM orders WHERE user_id=? AND status IN ('confirmed','completed')",
+              (str(user_id),))
+    row = c.fetchone()
+    conn.close()
+    return int(row['n']) if row else 0
+
+
+def get_user_tier(user_id):
+    """현재 적용 티어 dict 반환 (없으면 None)
+
+    {'tier': 1~3, 'need': 기준 건수, 'discount': 할인율(%), 'role_id': 역할ID, 'purchases': 누적건수}
+    """
+    try:
+        if str(get_setting('tier_enabled', 'false')).strip().lower() != 'true':
+            return None
+    except Exception:
+        return None
+
+    purchases = get_purchase_count(user_id)
+    best = None
+    for i in (1, 2, 3):
+        try:
+            need = int(str(get_setting(f'tier{i}_count', '0') or '0').strip() or 0)
+            disc = int(str(get_setting(f'tier{i}_discount', '0') or '0').strip() or 0)
+        except (TypeError, ValueError):
+            continue
+        role_id = str(get_setting(f'tier{i}_role_id', '') or '').strip()
+        if need > 0 and purchases >= need:
+            best = {'tier': i, 'need': need, 'discount': max(0, min(disc, 100)),
+                    'role_id': role_id, 'purchases': purchases}
+    return best
+
+
+def get_tier_discount(user_id):
+    """누적구매 티어 할인율(%)"""
+    tier = get_user_tier(user_id)
+    return int(tier['discount']) if tier else 0
+
 
 # ============ ADMINS ============
 def add_admin(user_id, username):

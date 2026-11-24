@@ -525,7 +525,9 @@
             <a href="#" data-tab="coupons"><i class="fas fa-ticket"></i><span>쿠폰 관리</span></a>
             <a href="#" data-tab="notice"><i class="fas fa-bullhorn"></i><span>공지 보내기</span></a>
             <a href="#" data-tab="depositlog"><i class="fas fa-history"></i><span>입금 로그</span></a>
-            <a href="#" data-tab="settings"><i class="fas fa-cog"></i><span>설정</span></a>
+            <a href="#" data-tab="stockreq"><i class="fas fa-inbox"></i><span>재고 요청{% if open_stock_requests %} <b style="color:#f59e0b">({{ open_stock_requests }})</b>{% endif %}</span></a>
+                <a href="#" data-tab="ops"><i class="fas fa-sliders-h"></i><span>운영 설정</span></a>
+                <a href="#" data-tab="settings"><i class="fas fa-cog"></i><span>설정</span></a>
             <a href="#" data-tab="admins"><i class="fas fa-user-shield"></i><span>관리자</span></a>
         </nav>
         <div class="logout">
@@ -843,6 +845,115 @@
             </div>
         </div>
         
+        <!-- Stock Requests Tab -->
+        <div class="tab-content" id="tab-stockreq">
+            <h2 style="margin:0 0 14px;font-size:20px">재고 요청
+                <span style="font-size:13px;opacity:.65;font-weight:400">· 대기 {{ open_stock_requests }}건</span>
+            </h2>
+            <div style="border:1px solid rgba(148,163,184,.25);border-radius:14px;overflow:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:14px">
+                    <thead>
+                        <tr style="background:rgba(148,163,184,.12);text-align:left">
+                            <th style="padding:10px">#</th>
+                            <th style="padding:10px">요청자</th>
+                            <th style="padding:10px">요청 내용</th>
+                            <th style="padding:10px">상태</th>
+                            <th style="padding:10px">접수</th>
+                            <th style="padding:10px"></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for r in stock_requests %}
+                        <tr style="border-top:1px solid rgba(148,163,184,.18)">
+                            <td style="padding:9px 10px;opacity:.7">{{ r.id }}</td>
+                            <td style="padding:9px 10px;font-weight:600">{{ r.username }}</td>
+                            <td style="padding:9px 10px">{{ (r.product_hint or r.content or '')[:80] }}</td>
+                            <td style="padding:9px 10px">
+                                {% if r.status == 'done' %}
+                                <span style="padding:3px 9px;border-radius:99px;font-size:12px;background:rgba(34,197,94,.16);color:#16a34a">완료</span>
+                                {% else %}
+                                <span style="padding:3px 9px;border-radius:99px;font-size:12px;background:rgba(245,158,11,.18);color:#d97706">대기</span>
+                                {% endif %}
+                            </td>
+                            <td style="padding:9px 10px;font-size:12px;opacity:.7">{{ r.created_at }}</td>
+                            <td style="padding:9px 10px;text-align:right">
+                                {% if r.status != 'done' %}
+                                <form method="post" action="/dashboard/stock-requests/{{ r.id }}/done" style="margin:0">
+                                    <button type="submit" style="padding:6px 12px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:12px;cursor:pointer">완료</button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="6" style="padding:26px;text-align:center;opacity:.6">아직 요청이 없습니다.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Ops Settings Tab -->
+        <div class="tab-content" id="tab-ops">
+            <h2 style="margin:0 0 14px;font-size:20px">운영 설정</h2>
+            <form method="post" action="/dashboard/tiers"
+                  style="border:1px solid rgba(148,163,184,.25);border-radius:14px;padding:18px">
+
+                <h3 style="margin:0 0 12px;font-size:15px">입고 알림 · 재고 요청</h3>
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px">
+                    <label style="font-size:13px">재고핑 역할 ID
+                        <input name="stock_ping_role_id" value="{{ settings.get('stock_ping_role_id','') }}"
+                               style="width:100%;margin-top:6px;padding:9px;border-radius:8px;border:1px solid rgba(148,163,184,.35)">
+                    </label>
+                    <label style="font-size:13px">재고요청 채널 ID
+                        <input name="stock_request_channel_id" value="{{ settings.get('stock_request_channel_id','') }}"
+                               style="width:100%;margin-top:6px;padding:9px;border-radius:8px;border:1px solid rgba(148,163,184,.35)">
+                    </label>
+                </div>
+                <label style="font-size:13px;display:block;margin-bottom:8px">
+                    <input type="checkbox" name="stock_notice_mention_role"
+                           {% if settings.get('stock_notice_mention_role','true') == 'true' %}checked{% endif %}>
+                    입고 알림에 재고핑 역할 멘션
+                </label>
+                <label style="font-size:13px;display:block;margin-bottom:18px">
+                    <input type="checkbox" name="charge_log_enabled"
+                           {% if settings.get('charge_log_enabled','false') == 'true' %}checked{% endif %}>
+                    충전로그 채널 전송 (기본 꺼짐)
+                </label>
+
+                <h3 style="margin:0 0 12px;font-size:15px">누적구매 티어 · 할인</h3>
+                <label style="font-size:13px;display:block;margin-bottom:12px">
+                    <input type="checkbox" name="tier_enabled"
+                           {% if settings.get('tier_enabled','false') == 'true' %}checked{% endif %}>
+                    티어 자동 지급 사용 (구매 확정 시 역할 자동 부여 + 결제 금액 할인)
+                </label>
+                <div style="overflow:auto">
+                    <table style="width:100%;border-collapse:collapse;font-size:13px">
+                        <thead><tr style="text-align:left;opacity:.75">
+                            <th style="padding:6px">티어</th>
+                            <th style="padding:6px">기준 구매(건)</th>
+                            <th style="padding:6px">할인(%)</th>
+                            <th style="padding:6px">역할 ID</th>
+                        </tr></thead>
+                        <tbody>
+                        {% for i in [1,2,3] %}
+                        <tr>
+                            <td style="padding:6px;font-weight:600">티어 {{ i }}</td>
+                            <td style="padding:6px"><input name="tier{{ i }}_count" value="{{ tier_cfg[i].count }}"
+                                style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(148,163,184,.35)"></td>
+                            <td style="padding:6px"><input name="tier{{ i }}_discount" value="{{ tier_cfg[i].discount }}"
+                                style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(148,163,184,.35)"></td>
+                            <td style="padding:6px"><input name="tier{{ i }}_role_id" value="{{ tier_cfg[i].role_id }}"
+                                style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(148,163,184,.35)"></td>
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <button type="submit"
+                        style="margin-top:16px;padding:11px 20px;border:0;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">저장</button>
+            </form>
+        </div>
+
         <!-- Settings Tab -->
         <div class="tab-content" id="tab-settings">
 <div style="margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,.12)">

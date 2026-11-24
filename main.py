@@ -522,6 +522,22 @@ def dashboard():
     # Bot status
     bot_status = 'online' if _bot_online() else 'offline'
 
+    # 재고 요청 현황 (재고요청 채널/패널 자동 접수)
+    try:
+        stock_requests = db.get_stock_requests(limit=60)
+        open_stock_requests = db.count_open_stock_requests()
+    except Exception:
+        stock_requests, open_stock_requests = [], 0
+
+    # 누적구매 티어 설정
+    tier_cfg = {}
+    for _i in (1, 2, 3):
+        tier_cfg[_i] = {
+            'count': settings.get(f'tier{_i}_count', ''),
+            'discount': settings.get(f'tier{_i}_discount', ''),
+            'role_id': settings.get(f'tier{_i}_role_id', ''),
+        }
+
     return render_template('dashboard.html',
         stats=stats,
         total_revenue=total_revenue,
@@ -532,7 +548,10 @@ def dashboard():
         bot_name=settings.get('bot_name', BOT_NAME),
         webhook_full_url=webhook_full_url,
         pending_charges=pending_charges,
-        charge_expire_minutes=charge_expire_minutes
+        charge_expire_minutes=charge_expire_minutes,
+        stock_requests=stock_requests,
+        open_stock_requests=open_stock_requests,
+        tier_cfg=tier_cfg
     )
 
 # ============ API ROUTES ============
@@ -1311,6 +1330,51 @@ def api_clear_deposit_webhook_logs():
 
 
 # --- Stats ---
+# --- 재고 요청 / 티어 운영 설정 (대시보드) ---
+@app.route('/api/stock-requests', methods=['GET'])
+@login_required
+def api_stock_requests():
+    status = (request.args.get('status') or '').strip() or None
+    return jsonify({
+        'requests': db.get_stock_requests(status=status, limit=100),
+        'open_count': db.count_open_stock_requests(),
+    })
+
+
+@app.route('/api/stock-requests/<int:rid>/done', methods=['POST'])
+@login_required
+def api_stock_request_done(rid):
+    db.mark_stock_request_done(rid, handled_by='dashboard')
+    return jsonify({'ok': True})
+
+
+@app.route('/dashboard/stock-requests/<int:rid>/done', methods=['POST'])
+@login_required
+def dashboard_stock_request_done(rid):
+    db.mark_stock_request_done(rid, handled_by='dashboard')
+    return redirect('/dashboard')
+
+
+@app.route('/dashboard/tiers', methods=['POST'])
+@login_required
+def dashboard_tiers():
+    """누적구매 티어 + 입고알림/재고요청/충전로그 설정 저장"""
+    db.set_setting('tier_enabled', 'true' if request.form.get('tier_enabled') else 'false')
+    for i in (1, 2, 3):
+        for key in ('count', 'discount', 'role_id'):
+            db.set_setting(f'tier{i}_{key}', (request.form.get(f'tier{i}_{key}') or '').strip())
+
+    for key in ('stock_ping_role_id', 'stock_request_channel_id'):
+        if key in request.form:
+            db.set_setting(key, (request.form.get(key) or '').strip())
+
+    db.set_setting('stock_notice_mention_role',
+                   'true' if request.form.get('stock_notice_mention_role') else 'false')
+    db.set_setting('charge_log_enabled',
+                   'true' if request.form.get('charge_log_enabled') else 'false')
+    return redirect('/dashboard')
+
+
 @app.route('/api/stats', methods=['GET'])
 @login_required
 def api_get_stats():
