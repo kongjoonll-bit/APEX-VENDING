@@ -47,6 +47,7 @@ DEFAULT_SETTINGS = {
     'deposit_log_channel_id': '1538129263792754809',
     'charge_log_channel_id': '1543260455500521573',
     'stock_channel_id': '1537817166819106827',
+    'stock_notice_channel_id': '1571090475761401927',   # 입고 알림 전용 채널
     'notice_channel_id': '1538705204948631652',
     'purchase_role_id': '1538126406662225981',
     'review_channel_id': '1537817307475349554',

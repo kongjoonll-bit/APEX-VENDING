@@ -1373,7 +1373,7 @@ def dashboard_tiers():
             db.set_setting(f'tier{i}_{key}', (request.form.get(f'tier{i}_{key}') or '').strip())
 
     for key in ('stock_ping_role_id', 'stock_request_channel_id', 'partner_role_id',
-                'partner_category_id'):
+                'partner_category_id', 'stock_notice_channel_id'):
         if key in request.form:
             db.set_setting(key, (request.form.get(key) or '').strip())
 

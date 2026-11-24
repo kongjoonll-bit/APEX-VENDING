@@ -1574,20 +1574,21 @@ class VendingBot(commands.Bot):
     
     async def send_stock_notice(self, product, key_count, extra_note=''):
         """재고(키) 입고 시 입고 채널에 카드 이미지 + 임베드 전송"""
-        stock_channel_id = db.get_setting('stock_channel_id', '')
-        if not stock_channel_id:
-            logger.warning("[입고알림] stock_channel_id 미설정 → 대시보드 설정에서 '입고 알림 채널 ID'를 저장하세요.")
+        stock_channel_id = (db.get_setting('stock_channel_id', '') or '').strip()   # 실시간 재고(링크용)
+        notice_channel_id = (db.get_setting('stock_notice_channel_id', '') or stock_channel_id).strip()
+        if not notice_channel_id:
+            logger.warning("[입고알림] 입고 알림 채널이 미설정입니다 → 대시보드 '입고 알림 채널 ID'를 저장하세요.")
             return
 
         try:
-            channel = self.get_channel(int(stock_channel_id))
+            channel = self.get_channel(int(notice_channel_id))
             if not channel:
                 try:
-                    channel = await self.fetch_channel(int(stock_channel_id))
+                    channel = await self.fetch_channel(int(notice_channel_id))
                 except Exception:
                     channel = None
             if not channel:
-                logger.warning(f"[입고알림] 채널을 찾을 수 없음: {stock_channel_id}")
+                logger.warning(f"[입고알림] 채널을 찾을 수 없음: {notice_channel_id}")
                 return
 
             total_stock = db.count_available_keys(product['id'])
@@ -1660,7 +1661,7 @@ class VendingBot(commands.Bot):
                 await channel.send(content=mention_text or None, embed=embed, file=file)
             else:
                 await channel.send(content=mention_text or None, embed=embed)
-            logger.info(f"[입고알림] 전송 완료: {product['name']} +{key_count}개 (채널 {stock_channel_id})")
+            logger.info(f"[입고알림] 전송 완료: {product['name']} +{key_count}개 (채널 {notice_channel_id})")
         except Exception as e:
             logger.error(f"Stock notice error: {e}")
     
@@ -3949,7 +3950,8 @@ class VendingCommands(commands.Cog):
             'id': 0, 'name': '테스트쿠키', 'price': 1000,
             'category': '테스트', 'description': '입고 알림 테스트'}
         await self.bot.send_stock_notice(prod, 1, extra_note='테스트 발송입니다')
-        ch_id = str(db.get_setting('stock_channel_id', '') or '')
+        ch_id = str(db.get_setting('stock_notice_channel_id', '')
+                    or db.get_setting('stock_channel_id', '') or '')
         await interaction.followup.send(
             f"입고 알림 채널(<#{ch_id}>)로 테스트를 보냈습니다.\n"
             f"안 보이면 봇 로그의 `[입고알림]` 항목을 확인해주세요.", ephemeral=True)
