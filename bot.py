@@ -469,6 +469,10 @@ class VendingBot(commands.Bot):
         if not getattr(self, '_cookie_task_started', False):
             self._cookie_task_started = True
             self.loop.create_task(self.cookie_check_loop())
+        # 대시보드 입고알림 대기열 처리 루프 (5초 간격)
+        if not getattr(self, '_notice_queue_started', False):
+            self._notice_queue_started = True
+            self.loop.create_task(self.stock_notice_queue_loop())
         # 재고 보드 30분 주기 갱신
         if not getattr(self, '_stock_board_started', False):
             self._stock_board_started = True
@@ -676,20 +680,25 @@ class VendingBot(commands.Bot):
         except Exception as e:
             logger.error(f"[쿠키검사] 알림 전송 실패: {e}")
     
+    async def stock_notice_queue_loop(self):
+        """대시보드에서 등록한 입고 알림 대기열을 5초마다 처리"""
+        await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                pending = db.pop_stock_notices()
+                for item in pending:
+                    prod = db.get_product(item.get('product_id')) or {}
+                    if not prod:
+                        prod = {'id': 0, 'name': item.get('name') or '쿠키',
+                                'price': 0, 'category': ''}
+                    await self.send_stock_notice(prod, item.get('count') or 1,
+                                                 extra_note=item.get('note') or '')
+            except Exception as e:
+                logger.error(f"[입고알림] 대기열 루프 오류: {e}")
+            await asyncio.sleep(5)
+
     async def refresh_stock_board(self):
         """재고 채널에 '재고 있는 상품 전체' 보드 이미지를 게시/갱신"""
-        # 대시보드(웹)에서 예약된 입고 알림 먼저 처리
-        try:
-            for item in db.pop_stock_notices():
-                prod = db.get_product(item.get('product_id')) or {}
-                if not prod:
-                    prod = {'id': 0, 'name': item.get('name') or '쿠키',
-                            'price': 0, 'category': ''}
-                await self.send_stock_notice(prod, item.get('count') or 1,
-                                             extra_note=item.get('note') or '')
-        except Exception as e:
-            logger.error(f"[입고알림] 대기열 처리 실패: {e}")
-
         channel_id = (db.get_setting('stock_channel_id', '') or '').strip()
         if not channel_id:
             return
