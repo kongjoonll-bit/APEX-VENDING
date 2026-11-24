@@ -1237,6 +1237,72 @@ class VendingBot(commands.Bot):
             logger.warning(f"[VENDING] 히스토리 검색 실패 채널 {channel.id}: {e}")
         return None
     
+    async def ensure_partner_roles(self, guild):
+        """파트너 알림 구독/차단 역할을 자동 생성하고 카테고리 권한까지 설정
+
+        - '파트너 알림'      : 구독자 (입고 알림 핑 대상)
+        - '파트너 알림 차단' : 미수신자 → partner_category_id 카테고리 숨김
+        - partner_panel_channel_id 채널만 예외적으로 보이게 유지
+        """
+        if guild is None:
+            return None, None
+
+        sub = discord.utils.get(guild.roles, name='파트너 알림')
+        blk = discord.utils.get(guild.roles, name='파트너 알림 차단')
+
+        def _by_id(key):
+            rid = str(db.get_setting(key, '') or '').strip()
+            return guild.get_role(int(rid)) if rid.isdigit() else None
+
+        sub = _by_id('partner_role_id') or sub
+        blk = _by_id('partner_block_role_id') or blk
+
+        try:
+            if not sub:
+                sub = await guild.create_role(name='파트너 알림', colour=discord.Colour(0xF0B429),
+                                              reason='파트너 알림 구독 역할 자동 생성')
+                logger.info(f"[PARTNER] 구독 역할 생성: {sub.name} ({sub.id})")
+            if not blk:
+                blk = await guild.create_role(name='파트너 알림 차단', colour=discord.Colour(0x4B5563),
+                                              reason='파트너 알림 미수신 역할 자동 생성')
+                logger.info(f"[PARTNER] 차단 역할 생성: {blk.name} ({blk.id})")
+        except discord.Forbidden:
+            logger.warning("[PARTNER] 역할 생성 권한 없음 — 봇에 '역할 관리' 권한이 필요합니다.")
+            return sub, blk
+
+        if sub:
+            db.set_setting('partner_role_id', str(sub.id))
+        if blk:
+            db.set_setting('partner_block_role_id', str(blk.id))
+
+        # 카테고리 숨김 (차단 역할)
+        cat_id = str(db.get_setting('partner_category_id', '') or '').strip()
+        cat = guild.get_channel(int(cat_id)) if cat_id.isdigit() else None
+        if blk and isinstance(cat, discord.CategoryChannel):
+            try:
+                ow = cat.overwrites_for(blk)
+                if ow.view_channel is not False:
+                    await cat.set_permissions(blk, view_channel=False,
+                                              reason='파트너 알림 미수신 → 파트너 카테고리 숨김')
+                    logger.info(f"[PARTNER] 카테고리 숨김 적용: {cat.name}")
+            except Exception as e:
+                logger.warning(f"[PARTNER] 카테고리 권한 설정 실패: {e}")
+
+        # 패널 채널은 예외적으로 보이게
+        panel_id = str(db.get_setting('partner_panel_channel_id', '') or '').strip()
+        if blk and panel_id.isdigit():
+            ch = guild.get_channel(int(panel_id))
+            if ch:
+                try:
+                    ow = ch.overwrites_for(blk)
+                    if ow.view_channel is not True:
+                        await ch.set_permissions(blk, view_channel=True,
+                                                  reason='파트너 패널 채널은 항상 표시')
+                except Exception as e:
+                    logger.warning(f"[PARTNER] 패널 채널 권한 설정 실패: {e}")
+
+        return sub, blk
+
     async def apply_tier_role(self, user_id):
         """누적구매 티어에 맞는 역할 자동 지급 (+ 하위 티어 역할 정리)"""
         try:
@@ -1929,36 +1995,42 @@ class PartnerPingButton(discord.ui.Button):
         self.enable = enable
 
     async def callback(self, interaction: discord.Interaction):
-        role_id = str(db.get_setting('partner_role_id', '') or '').strip()
-        if not role_id:
-            await interaction.response.send_message(
-                "파트너 역할이 아직 설정되지 않았습니다. 관리자에게 문의해주세요.", ephemeral=True)
-            return
         guild = interaction.guild
-        role = guild.get_role(int(role_id)) if (guild and role_id.isdigit()) else None
-        if not role:
-            await interaction.response.send_message("파트너 역할을 찾을 수 없습니다.", ephemeral=True)
+        if guild is None:
+            await interaction.response.send_message("서버에서만 사용할 수 있습니다.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        sub, blk = await interaction.client.ensure_partner_roles(guild)
+        if not sub or not blk:
+            await interaction.followup.send(
+                "파트너 역할을 만들 수 없습니다. 봇에 **역할 관리** 권한이 있는지 확인해주세요.",
+                ephemeral=True)
             return
 
         member = interaction.user
         try:
             if self.enable:
-                if role in member.roles:
-                    await interaction.response.send_message(
-                        f"이미 {role.mention} 알림을 받고 있습니다.", ephemeral=True)
-                    return
-                await member.add_roles(role, reason="파트너 알림 구독")
-                await interaction.response.send_message(
-                    f"{role.mention} 파트너 알림을 켰습니다.\n입고 소식과 파트너 혜택을 받아보세요.", ephemeral=True)
+                if blk in member.roles:
+                    await member.remove_roles(blk, reason="파트너 알림 수신 시작")
+                if sub not in member.roles:
+                    await member.add_roles(sub, reason="파트너 알림 구독")
+                await interaction.followup.send(
+                    f"{sub.mention} 파트너 알림을 켰습니다.\n파트너 채널이 다시 보입니다.", ephemeral=True)
             else:
-                if role not in member.roles:
-                    await interaction.response.send_message("파트너 알림을 받고 있지 않습니다.", ephemeral=True)
-                    return
-                await member.remove_roles(role, reason="파트너 알림 해지")
-                await interaction.response.send_message("파트너 알림을 껐습니다.", ephemeral=True)
+                if sub in member.roles:
+                    await member.remove_roles(sub, reason="파트너 알림 해지")
+                if blk not in member.roles:
+                    await member.add_roles(blk, reason="파트너 알림 해지 → 파트너 채널 숨김")
+                # 카테고리 숨김 + 패널 채널 예외 재적용
+                await interaction.client.ensure_partner_roles(guild)
+                await interaction.followup.send(
+                    "파트너 알림을 껐습니다.\n-# 파트너 카테고리는 숨겨지고, 이 패널 채널만 계속 표시됩니다.",
+                    ephemeral=True)
         except discord.Forbidden:
-            await interaction.response.send_message(
-                "역할을 변경할 권한이 없습니다. 봇 역할을 파트너 역할보다 위로 올려주세요.", ephemeral=True)
+            await interaction.followup.send(
+                "역할을 변경할 권한이 없습니다. 봇 역할을 파트너 역할들보다 위로 올려주세요.",
+                ephemeral=True)
 
 
 class PartnerPingView(ui.LayoutView):
@@ -3797,6 +3869,11 @@ class VendingCommands(commands.Cog):
             logger.error(f"[패널] 파트너알림 게시 실패: {e}")
             await interaction.response.send_message(f"게시 실패: {e}", ephemeral=True)
             return
+        try:
+            db.set_setting('partner_panel_channel_id', str(interaction.channel_id))
+            await interaction.client.ensure_partner_roles(interaction.guild)
+        except Exception as e:
+            logger.warning(f"[PARTNER] 패널 채널 등록/권한 설정 실패: {e}")
         await interaction.response.send_message("파트너 알림 패널을 게시했습니다.", ephemeral=True)
 
     @app_commands.command(name="재고요청패널", description="[관리자] 재고 요청 패널을 게시합니다")
