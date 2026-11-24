@@ -67,11 +67,15 @@ DEFAULT_SETTINGS = {
     'partner_panel_channel_id': '',          # 파트너 패널 채널 (숨김 예외)
     'stock_request_channel_id': '',          # 재고요청 채널
     'stock_notice_mention_role': 'true',     # 입고알림에 재고핑 역할 멘션
-    # ── 누적구매 티어(할인/역할) ──
+    # 파트너 카테고리에서 숨기지 않을 채널 (콤마 구분)
+    'partner_panel_channel_ids': '1564964569628020907,1574726845860020387',
+    # ── 누적구매 티어(5단계 · 누적 결제금액 기준) ──
     'tier_enabled': 'false',
-    'tier1_count': '3',   'tier1_role_id': '', 'tier1_discount': '3',
-    'tier2_count': '10',  'tier2_role_id': '', 'tier2_discount': '5',
-    'tier3_count': '30',  'tier3_role_id': '', 'tier3_discount': '10',
+    'tier1_name': '브론즈',  'tier1_amount': '10000',  'tier1_role_id': '', 'tier1_discount': '3',
+    'tier2_name': '실버',    'tier2_amount': '30000',  'tier2_role_id': '', 'tier2_discount': '5',
+    'tier3_name': '골드',    'tier3_amount': '70000',  'tier3_role_id': '', 'tier3_discount': '7',
+    'tier4_name': '플래티넘', 'tier4_amount': '150000', 'tier4_role_id': '', 'tier4_discount': '10',
+    'tier5_name': '다이아',  'tier5_amount': '300000', 'tier5_role_id': '', 'tier5_discount': '15',
 }
 
 def get_conn():
@@ -1273,7 +1277,10 @@ def get_recent_requesters(days=14, limit=5):
     return [dict(r) for r in rows]
 
 
-# ============ PURCHASE TIERS (누적구매 역할/할인) ============
+# ============ PURCHASE TIERS (누적구매 금액 기준 5단계) ============
+TIER_MAX = 5
+
+
 def get_purchase_count(user_id):
     """누적 구매(확정/완료) 건수"""
     conn = get_conn()
@@ -1285,30 +1292,77 @@ def get_purchase_count(user_id):
     return int(row['n']) if row else 0
 
 
-def get_user_tier(user_id):
-    """현재 적용 티어 dict 반환 (없으면 None)
+def get_purchase_total(user_id):
+    """누적 결제 금액(원) — 확정/완료 주문 합계"""
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("SELECT COALESCE(SUM(amount), 0) AS total FROM orders "
+              "WHERE user_id=? AND status IN ('confirmed','completed')", (str(user_id),))
+    row = c.fetchone()
+    conn.close()
+    return int(row['total']) if row else 0
 
-    {'tier': 1~3, 'need': 기준 건수, 'discount': 할인율(%), 'role_id': 역할ID, 'purchases': 누적건수}
-    """
-    try:
-        if str(get_setting('tier_enabled', 'false')).strip().lower() != 'true':
-            return None
-    except Exception:
-        return None
 
-    purchases = get_purchase_count(user_id)
-    best = None
-    for i in (1, 2, 3):
+def get_tier_config():
+    """설정에서 티어 5단계 목록 읽기"""
+    tiers = []
+    for i in range(1, TIER_MAX + 1):
         try:
-            need = int(str(get_setting(f'tier{i}_count', '0') or '0').strip() or 0)
+            amount = int(str(get_setting(f'tier{i}_amount', '0') or '0').strip() or 0)
+        except (TypeError, ValueError):
+            amount = 0
+        if amount <= 0:      # 예전(건수 기준) 설정 호환
+            try:
+                amount = int(str(get_setting(f'tier{i}_count', '0') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                amount = 0
+        try:
             disc = int(str(get_setting(f'tier{i}_discount', '0') or '0').strip() or 0)
         except (TypeError, ValueError):
-            continue
-        role_id = str(get_setting(f'tier{i}_role_id', '') or '').strip()
-        if need > 0 and purchases >= need:
-            best = {'tier': i, 'need': need, 'discount': max(0, min(disc, 100)),
-                    'role_id': role_id, 'purchases': purchases}
+            disc = 0
+        name = str(get_setting(f'tier{i}_name', '') or f'티어 {i}').strip()
+        tiers.append({
+            'tier': i,
+            'name': name or f'티어 {i}',
+            'amount': max(0, amount),
+            'discount': max(0, min(disc, 100)),
+            'role_id': str(get_setting(f'tier{i}_role_id', '') or '').strip(),
+        })
+    return tiers
+
+
+def _tier_enabled():
+    try:
+        return str(get_setting('tier_enabled', 'false')).strip().lower() == 'true'
+    except Exception:
+        return False
+
+
+def get_user_tier(user_id):
+    """현재 티어 dict (없으면 None) — 누적 결제금액 기준"""
+    if not _tier_enabled():
+        return None
+    total = get_purchase_total(user_id)
+    best = None
+    for t in get_tier_config():
+        if t['amount'] > 0 and total >= t['amount']:
+            best = dict(t)
+    if best:
+        best['total'] = total
+        best['purchases'] = get_purchase_count(user_id)
     return best
+
+
+def get_next_tier(user_id):
+    """다음 등급 정보 dict(없으면 None) — {'name','amount','remaining','discount',...}"""
+    total = get_purchase_total(user_id)
+    for t in get_tier_config():
+        if t['amount'] > 0 and total < t['amount']:
+            item = dict(t)
+            item['total'] = total
+            item['remaining'] = t['amount'] - total
+            return item
+    return None
 
 
 def get_tier_discount(user_id):

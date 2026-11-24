@@ -932,25 +932,32 @@
                 <label style="font-size:13px;display:block;margin-bottom:12px">
                     <input type="checkbox" name="tier_enabled"
                            {% if settings.get('tier_enabled','false') == 'true' %}checked{% endif %}>
-                    티어 자동 지급 사용 (구매 확정 시 역할 자동 부여 + 결제 금액 할인)
+                    티어 자동 지급 사용 (누적 결제금액 기준 · 역할 부여 + 결제 금액 할인)
                 </label>
                 <div style="overflow:auto">
                     <table style="width:100%;border-collapse:collapse;font-size:13px">
                         <thead><tr style="text-align:left;opacity:.75">
                             <th style="padding:6px">티어</th>
-                            <th style="padding:6px">기준 구매(건)</th>
+                            <th style="padding:6px">등급 이름</th>
+                            <th style="padding:6px">기준 누적금액(원)</th>
                             <th style="padding:6px">할인(%)</th>
                             <th style="padding:6px">역할 ID</th>
                         </tr></thead>
                         <tbody>
-                        {% for i in [1,2,3] %}
+                        {% for i in [1,2,3,4,5] %}
                         <tr>
                             <td style="padding:6px;font-weight:600">티어 {{ i }}</td>
-                            <td style="padding:6px"><input name="tier{{ i }}_count" value="{{ tier_cfg[i].count }}"
+                            <td style="padding:6px"><input name="tier{{ i }}_name" value="{{ tier_cfg[i].name }}"
+                                placeholder="예: 브론즈"
+                                style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(148,163,184,.35)"></td>
+                            <td style="padding:6px"><input name="tier{{ i }}_amount" value="{{ tier_cfg[i].amount }}"
+                                placeholder="예: 10000"
                                 style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(148,163,184,.35)"></td>
                             <td style="padding:6px"><input name="tier{{ i }}_discount" value="{{ tier_cfg[i].discount }}"
+                                placeholder="예: 3"
                                 style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(148,163,184,.35)"></td>
                             <td style="padding:6px"><input name="tier{{ i }}_role_id" value="{{ tier_cfg[i].role_id }}"
+                                placeholder="역할 ID"
                                 style="width:100%;padding:8px;border-radius:8px;border:1px solid rgba(148,163,184,.35)"></td>
                         </tr>
                         {% endfor %}

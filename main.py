@@ -531,9 +531,10 @@ def dashboard():
 
     # 누적구매 티어 설정
     tier_cfg = {}
-    for _i in (1, 2, 3):
+    for _i in range(1, 6):
         tier_cfg[_i] = {
-            'count': settings.get(f'tier{_i}_count', ''),
+            'name': settings.get(f'tier{_i}_name', ''),
+            'amount': settings.get(f'tier{_i}_amount', settings.get(f'tier{_i}_count', '')),
             'discount': settings.get(f'tier{_i}_discount', ''),
             'role_id': settings.get(f'tier{_i}_role_id', ''),
         }
@@ -1360,8 +1361,8 @@ def dashboard_stock_request_done(rid):
 def dashboard_tiers():
     """누적구매 티어 + 입고알림/재고요청/충전로그 설정 저장"""
     db.set_setting('tier_enabled', 'true' if request.form.get('tier_enabled') else 'false')
-    for i in (1, 2, 3):
-        for key in ('count', 'discount', 'role_id'):
+    for i in range(1, 6):
+        for key in ('name', 'amount', 'discount', 'role_id'):
             db.set_setting(f'tier{i}_{key}', (request.form.get(f'tier{i}_{key}') or '').strip())
 
     for key in ('stock_ping_role_id', 'stock_request_channel_id', 'partner_role_id',
