@@ -1425,6 +1425,24 @@ def dashboard_partner_hide_apply():
     return redirect('/dashboard')
 
 
+@app.route('/api/stock-notice/test', methods=['POST'])
+@login_required
+def api_stock_notice_test():
+    """입고 알림 테스트 발송"""
+    if not (_bot_online() and bot.is_ready()):
+        return jsonify({'success': False, 'error': '봇이 오프라인입니다.'}), 503
+    try:
+        prod = {'id': 0, 'name': '테스트쿠키', 'price': 1000,
+                'category': '테스트', 'description': '입고 알림 테스트'}
+        fut = asyncio.run_coroutine_threadsafe(
+            bot.send_stock_notice(prod, 1, extra_note='대시보드 테스트 발송'), _bot_loop())
+        fut.result(timeout=25)
+        return jsonify({'success': True, 'message': '테스트 알림을 발송했습니다. 채널을 확인하세요.'})
+    except Exception as e:
+        logger.error(f"[입고알림] 테스트 실패: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/stats', methods=['GET'])
 @login_required
 def api_get_stats():

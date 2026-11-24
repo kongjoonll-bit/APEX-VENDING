@@ -1608,7 +1608,8 @@ class VendingBot(commands.Bot):
             try:
                 for r in db.get_recent_requesters(days=14, limit=4):
                     uid = str(r.get('user_id') or '').strip()
-                    if uid:
+                    # 실제 디스코드 ID만 (테스트/더미 값 제외)
+                    if uid.isdigit() and len(uid) >= 17:
                         mention_parts.append(f"<@{uid}>")
             except Exception:
                 pass
@@ -3936,6 +3937,22 @@ class VendingCommands(commands.Cog):
             await interaction.response.send_message(f"게시 실패: {e}", ephemeral=True)
             return
         await interaction.response.send_message("재고 요청 패널을 게시했습니다.", ephemeral=True)
+
+    @app_commands.command(name="알림테스트", description="[관리자] 입고 알림을 실제 채널로 테스트 발송합니다")
+    @app_commands.describe(product_id="상품 ID (비우면 샘플 상품으로 전송)")
+    async def stock_notice_test(self, interaction: discord.Interaction, product_id: int = None):
+        if not self.is_admin_check(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        prod = db.get_product(product_id) if product_id else {
+            'id': 0, 'name': '테스트쿠키', 'price': 1000,
+            'category': '테스트', 'description': '입고 알림 테스트'}
+        await self.bot.send_stock_notice(prod, 1, extra_note='테스트 발송입니다')
+        ch_id = str(db.get_setting('stock_channel_id', '') or '')
+        await interaction.followup.send(
+            f"입고 알림 채널(<#{ch_id}>)로 테스트를 보냈습니다.\n"
+            f"안 보이면 봇 로그의 `[입고알림]` 항목을 확인해주세요.", ephemeral=True)
 
     @app_commands.command(name="입고", description="[관리자] 입고 알림을 전송합니다 (재고 수량 변경 없음)")
     @app_commands.describe(product="상품 ID 또는 이름", count="입고 수량", note="추가 안내 문구 (선택)")
