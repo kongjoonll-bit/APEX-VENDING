@@ -61,6 +61,7 @@ DEFAULT_SETTINGS = {
     # ── 충전로그/입고알림 ──
     'charge_log_enabled': 'false',           # 충전로그 채널 전송 여부
     'stock_ping_role_id': '',                # 재고핑 역할
+    'partner_role_id': '',                   # 파트너 알림 역할
     'stock_request_channel_id': '',          # 재고요청 채널
     'stock_notice_mention_role': 'true',     # 입고알림에 재고핑 역할 멘션
     # ── 누적구매 티어(할인/역할) ──
