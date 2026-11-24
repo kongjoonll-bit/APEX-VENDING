@@ -1202,6 +1202,35 @@ def get_user_charge_requests(user_id, limit=10):
     conn.close()
     return [dict(r) for r in rows]
 
+# ============ STOCK NOTICE QUEUE (웹→봇 알림 전달) ============
+def queue_stock_notice(product_id, count, note='', name=''):
+    """입고 알림 대기열에 추가 — 봇 스레드가 20초 내 처리"""
+    try:
+        q = json.loads(get_setting('stock_notice_queue', '[]') or '[]')
+        if not isinstance(q, list):
+            q = []
+    except Exception:
+        q = []
+    q.append({'product_id': int(product_id or 0), 'count': int(count or 0),
+              'note': note or '', 'name': name or ''})
+    set_setting('stock_notice_queue', json.dumps(q[-30:], ensure_ascii=False))
+    return len(q)
+
+
+def pop_stock_notices():
+    """대기열 비우고 반환"""
+    raw = get_setting('stock_notice_queue', '[]') or '[]'
+    try:
+        q = json.loads(raw)
+        if not isinstance(q, list):
+            q = []
+    except Exception:
+        q = []
+    if q:
+        set_setting('stock_notice_queue', '[]')
+    return q
+
+
 # ============ STOCK REQUESTS (재고 요청) ============
 def _ensure_stock_request_table(c):
     c.execute('''CREATE TABLE IF NOT EXISTS stock_requests (

@@ -678,6 +678,18 @@ class VendingBot(commands.Bot):
     
     async def refresh_stock_board(self):
         """재고 채널에 '재고 있는 상품 전체' 보드 이미지를 게시/갱신"""
+        # 대시보드(웹)에서 예약된 입고 알림 먼저 처리
+        try:
+            for item in db.pop_stock_notices():
+                prod = db.get_product(item.get('product_id')) or {}
+                if not prod:
+                    prod = {'id': 0, 'name': item.get('name') or '쿠키',
+                            'price': 0, 'category': ''}
+                await self.send_stock_notice(prod, item.get('count') or 1,
+                                             extra_note=item.get('note') or '')
+        except Exception as e:
+            logger.error(f"[입고알림] 대기열 처리 실패: {e}")
+
         channel_id = (db.get_setting('stock_channel_id', '') or '').strip()
         if not channel_id:
             return

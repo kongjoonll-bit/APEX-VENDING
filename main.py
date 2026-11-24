@@ -119,6 +119,47 @@ def _bot_online():
         return False
 
 
+def _fire_stock_notice(product, count):
+    """입고 알림 전송 — 즉시 시도하고, 실패하면 DB 대기열로 넘겨 봇이 20초 내 발송
+
+    웹(Flask) 스레드에서 봇 이벤트 루프로 넘길 때 예외가 조용히 사라지는 문제를
+    막기 위해, 예약 결과를 반드시 로그로 남기고 실패 시 대기열에 넣는다.
+    """
+    name = (product or {}).get('name', '')
+    pid = (product or {}).get('id', 0)
+    try:
+        if bot.is_ready():
+            loop = _bot_loop()
+            if loop is not None:
+                fut = asyncio.run_coroutine_threadsafe(
+                    bot.send_stock_notice(product, count), loop)
+
+                def _done(f):
+                    try:
+                        f.result()
+                        logger.info(f"[입고알림] 즉시 전송 성공: {name} +{count}")
+                    except Exception as e:
+                        logger.error(f"[입고알림] 즉시 전송 실패 → 대기열 등록: {e}")
+                        try:
+                            db.queue_stock_notice(pid, count, '즉시전송 실패', name)
+                        except Exception:
+                            pass
+
+                fut.add_done_callback(_done)
+                return True
+
+        logger.warning("[입고알림] 봇 준비 안됨 → 대기열 등록 (봇이 켜지면 자동 발송)")
+        db.queue_stock_notice(pid, count, '봇 미준비', name)
+        return False
+    except Exception as e:
+        logger.error(f"[입고알림] 예약 오류 → 대기열 등록: {e}")
+        try:
+            db.queue_stock_notice(pid, count, '예약 오류', name)
+        except Exception:
+            pass
+        return False
+
+
 # Create Flask app
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'apex-vending-secret-key-change-me')
@@ -674,15 +715,15 @@ def api_add_keys(pid):
     count = len(key_list)
 
     product = db.get_product(pid)
+    notice_ok = _fire_stock_notice(product, count) if product else False
     if product and bot.is_ready():
         try:
-            asyncio.run_coroutine_threadsafe(bot.send_stock_notice(product, count), _bot_loop())
             asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(), _bot_loop())
             asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), _bot_loop())
         except Exception as e:
-            logger.error(f"Stock notice error: {e}")
+            logger.error(f"Stock refresh error: {e}")
 
-    return jsonify({'success': True, 'count': count})
+    return jsonify({'success': True, 'count': count, 'notice': notice_ok})
 
 @app.route('/api/products/<int:pid>/keyfiles', methods=['POST'])
 @login_required
@@ -712,17 +753,19 @@ def api_add_key_files(pid):
 
     count = db.add_key_files(pid, entries)
 
-    # 입고 채널 공지 + 자판기 새로고침 (봇이 실행 중일 때만)
+    # 입고 채널 공지 → 실패 시 대기열로 자동 재시도
+    notice_ok = _fire_stock_notice(product, count)
+
+    # 자판기 새로고침 + 즉시 쿠키 검사 (봇이 실행 중일 때만)
     if bot.is_ready():
         try:
-            asyncio.run_coroutine_threadsafe(bot.send_stock_notice(product, count), _bot_loop())
             asyncio.run_coroutine_threadsafe(bot.refresh_vending_machines(), _bot_loop())
             # 새로 등록한 파일은 즉시 쿠키 검사 (검사 전에는 판매되지 않음)
             asyncio.run_coroutine_threadsafe(bot.check_all_cookies(), _bot_loop())
         except Exception as e:
-            logger.error(f"Stock notice error: {e}")
+            logger.error(f"Stock refresh error: {e}")
 
-    return jsonify({'success': True, 'count': count, 'skipped': skipped})
+    return jsonify({'success': True, 'count': count, 'skipped': skipped, 'notice': notice_ok})
 
 @app.route('/api/keys/<int:kid>/download')
 @login_required
