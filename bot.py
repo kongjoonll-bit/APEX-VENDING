@@ -1065,9 +1065,9 @@ class VendingBot(commands.Bot):
             pass
 
     async def get_charge_log_channel(self):
-        """충전로그 채널 반환 (설정 키: charge_log_channel_id → 없으면 deposit_log_channel_id → admin_channel_id)"""
-        cid = (db.get_setting('charge_log_channel_id', '')
-               or db.get_setting('deposit_log_channel_id', '')
+        """입금/충전 로그 채널 반환 (입금로그 → 충전로그 → 관리자 순)"""
+        cid = (db.get_setting('deposit_log_channel_id', '')
+               or db.get_setting('charge_log_channel_id', '')
                or db.get_setting('admin_channel_id', ''))
         if not cid:
             return None, "충전로그 채널이 설정되지 않았습니다.\n대시보드 설정에서 **충전로그 채널 ID**를 저장하세요."
@@ -1114,12 +1114,7 @@ class VendingBot(commands.Bot):
         db.set_charge_receipt_image(req['id'], attachment.url)
         await message.channel.send("입금 증거 스크린샷이 접수되었습니다! 관리자가 확인 후 승인하면 포인트가 충전됩니다 ")
 
-        # 충전로그 채널 게시 여부 (대시보드 설정: charge_log_enabled)
-        if str(db.get_setting('charge_log_enabled', 'false')).strip().lower() != 'true':
-            logger.info(f"[충전로그] #{req['id']} 증거 접수됨 (로그 전송 꺼짐)")
-            return
-
-        # 충전로그 채널에 게시
+        # 충전로그 채널에 게시 (입금로그 채널)
         channel, err = await self.get_charge_log_channel()
         if not channel:
             logger.error(f"[충전로그] {err}")
@@ -1751,7 +1746,7 @@ class VendingBot(commands.Bot):
             req_cid = db.get_setting('stock_request_channel_id', '')
             req_ref = f"<#{req_cid}>" if req_cid else "재고요청 채널"
 
-            # 핑: 재고핑 역할 + 최근 요청자
+            # 핑 대상: 재고핑 역할 + **이 상품을 요청한 사람만**
             mention_parts = []
             role_id = str(db.get_setting('stock_ping_role_id', '') or '').strip()
             if role_id and str(db.get_setting('stock_notice_mention_role', 'true')).lower() == 'true':
@@ -1759,14 +1754,16 @@ class VendingBot(commands.Bot):
             partner_id = str(db.get_setting('partner_role_id', '') or '').strip()
             if partner_id and str(db.get_setting('stock_notice_mention_role', 'true')).lower() == 'true':
                 mention_parts.append(f"<@&{partner_id}>")
+
+            matched_requests = []
             try:
-                for r in db.get_recent_requesters(days=14, limit=4):
-                    uid = str(r.get('user_id') or '').strip()
-                    # 실제 디스코드 ID만 (테스트/더미 값 제외)
-                    if uid.isdigit() and len(uid) >= 17:
-                        mention_parts.append(f"<@{uid}>")
-            except Exception:
-                pass
+                matched_requests = db.find_open_requests(product.get('name', ''))
+            except Exception as e:
+                logger.warning(f"[입고알림] 요청 조회 실패: {e}")
+            for req in matched_requests[:8]:
+                uid = str(req.get('user_id') or '').strip()
+                if uid.isdigit() and len(uid) >= 17:
+                    mention_parts.append(f"<@{uid}>")
             mention_text = " ".join(mention_parts)
 
             desc = f"{live_ref}\n\n원하는 쿠키가 있다면 {req_ref}"
@@ -1815,11 +1812,25 @@ class VendingBot(commands.Bot):
                 await channel.send(content=mention_text or None, embed=embed, file=file)
             else:
                 await channel.send(content=mention_text or None, embed=embed)
-            # 대기 중인 재고 요청 자동 완료 + 요청자 DM
-            try:
-                await self.complete_stock_requests_for(product.get('name', ''))
-            except Exception as e:
-                logger.warning(f"[재고요청] 자동 완료 실패: {e}")
+            # 요청 자동 완료 + 요청자 DM (한 번 입고되면 다시 알림/핑 대상에서 제외)
+            done_count = 0
+            for req in matched_requests:
+                try:
+                    db.mark_stock_request_done(req['id'], handled_by='auto')
+                    done_count += 1
+                    await self.send_dm(
+                        req['user_id'],
+                        f"**요청하신 상품이 입고되었습니다!**\n\n"
+                        f"> {req.get('product_hint') or product['name']}\n\n"
+                        f"지금 자판기에서 바로 구매할 수 있어요.")
+                except Exception as e:
+                    logger.warning(f"[재고요청] 자동완료/DM 실패 (#{req.get('id')}): {e}")
+            if done_count:
+                logger.info(f"[재고요청] {done_count}건 자동 완료 + 요청자 DM")
+                try:
+                    await self.refresh_stock_panel()
+                except Exception:
+                    pass
 
             # 실시간 재고 보드 즉시 갱신 (입고 직후)
             try:

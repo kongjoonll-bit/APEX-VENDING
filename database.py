@@ -1293,6 +1293,25 @@ def mark_stock_request_done(request_id, handled_by=''):
     conn.close()
 
 
+def find_open_requests(product_name):
+    """해당 상품을 기다리는 '대기' 요청만 추려서 반환 (요청자 1명당 1건)"""
+    name = (product_name or '').strip().lower()
+    if not name:
+        return []
+    found, seen = [], set()
+    for req in get_stock_requests(status='open', limit=200):
+        blob = f"{req.get('product_hint') or ''} {req.get('content') or ''}".lower()
+        hit = (name in blob) or (len(name) >= 3 and name[:3] in blob)
+        if not hit:
+            continue
+        uid = str(req.get('user_id') or '').strip()
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
+        found.append(req)
+    return found
+
+
 def get_recent_requesters(days=14, limit=5):
     """최근 재고요청자 목록 (입고 알림 핑용) — 중복 제거, 최신순"""
     conn = get_conn()
