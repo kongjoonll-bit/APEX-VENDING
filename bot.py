@@ -1563,7 +1563,8 @@ class VendingBot(commands.Bot):
                 order.get('product_name') or '쿠키',
                 content=content_text, file_name=fname, file_data=fdata,
                 amount=order.get('amount') or 0)
-            return f"{base}/p/{token}", pin
+            guide = f"{base}/guide"
+            return f"{base}/p/{token}", pin, guide
         except Exception as e:
             logger.warning(f"[DELIVERY] 링크 생성 실패: {e}")
             return None
@@ -1645,17 +1646,24 @@ class VendingBot(commands.Bot):
             inline=False)
         embed.set_footer(text=brand_tag('THANK YOU'))
 
-        # 웹 전달 페이지(링크 + PIN) — DM 본문 상단에 크게 표시
+        # 웹 전달 페이지(링크 + PIN) + 사용법 링크
         delivery_content = ''
+        guide_link = ''
         try:
             dl = await self._attach_delivery_link(embed, order, key)
             if dl:
-                link, pin = dl
+                link, pin, guide = dl
+                guide_link = guide
                 delivery_content = (f"## 🍪 쿠키 전달 페이지\n"
                                     f"**[▶ 지금 열기]({link})**\n"
-                                    f"### PIN `{pin}`")
+                                    f"### PIN `{pin}`\n\n"
+                                    f"**[📖 가이드 보기 (사용법)]({guide})**")
         except Exception as e:
             logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
+
+        if guide_link:
+            embed.add_field(name="📖 사용법",
+                            value=f"[가이드 보기]({guide_link})", inline=False)
 
         if card_png:
             await self.send_dm(order['user_id'], content=delivery_content or None,
@@ -1663,10 +1671,8 @@ class VendingBot(commands.Bot):
         else:
             await self.send_dm(order['user_id'], content=delivery_content or None, embed=embed)
         await self.refresh_vending_machines()
-        
-        sent_file = (card_key_file is not None) if card_png else (key_file is not None)
-        delivered = '파일' if sent_file else '키'
-        return True, f"주문 #{order_id} 완료! {delivered}가 전송되었습니다."
+
+        return True, f"주문 #{order_id} 완료! 웹 전달 페이지 링크를 전송했습니다."
     
     async def cancel_order(self, order_id):
         order = db.get_order(order_id)
@@ -3454,11 +3460,13 @@ class ConfirmBuyButton(discord.ui.Button):
                  'product_name': self.product['name'], 'amount': final_price},
                 key)
             if dl:
-                link, pin = dl
+                link, pin, guide = dl
                 big = (f"## 🍪 쿠키 전달 페이지\n"
                        f"**[▶ 지금 열기]({link})**\n"
-                       f"### PIN `{pin}`")
+                       f"### PIN `{pin}`\n\n"
+                       f"**[📖 가이드 보기 (사용법)]({guide})**")
                 content = f"{big}\n\n{content}" if content else big
+                embed.add_field(name="📖 사용법", value=f"[가이드 보기]({guide})", inline=False)
         except Exception as e:
             logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
 
