@@ -680,6 +680,51 @@ class VendingBot(commands.Bot):
         except Exception as e:
             logger.error(f"[쿠키검사] 알림 전송 실패: {e}")
     
+    async def refresh_stock_panel(self):
+        """재고 요청 패널 메시지를 최신 대기 건수로 갱신"""
+        ch_id = str(db.get_setting('stock_request_panel_channel_id', '') or '').strip()
+        msg_id = str(db.get_setting('stock_request_panel_message_id', '') or '').strip()
+        if not (ch_id.isdigit() and msg_id.isdigit()):
+            return
+        try:
+            ch = self.get_channel(int(ch_id))
+            if ch is None:
+                ch = await self.fetch_channel(int(ch_id))
+            msg = await ch.fetch_message(int(msg_id))
+            await msg.edit(view=StockRequestView())
+            logger.info("[재고요청] 패널 갱신 완료")
+        except Exception as e:
+            logger.warning(f"[재고요청] 패널 갱신 실패: {e}")
+
+    async def complete_stock_requests_for(self, product_name):
+        """입고된 상품의 대기 요청을 자동 완료 처리 + 요청자에게 DM 발송"""
+        name = (product_name or '').strip().lower()
+        if not name:
+            return 0
+        done = 0
+        try:
+            for req in db.get_stock_requests(status='open', limit=100):
+                blob = f"{req.get('product_hint') or ''} {req.get('content') or ''}".lower()
+                hit = (name in blob) or (len(name) >= 4 and name[:4] in blob)
+                if not hit:
+                    continue
+                db.mark_stock_request_done(req['id'], handled_by='auto')
+                done += 1
+                try:
+                    await self.send_dm(
+                        req['user_id'],
+                        f"**요청하신 상품이 입고되었습니다!**\n\n"
+                        f"> {req.get('product_hint') or product_name}\n\n"
+                        f"지금 자판기에서 바로 구매할 수 있어요.")
+                except Exception as e:
+                    logger.warning(f"[재고요청] DM 실패 ({req.get('user_id')}): {e}")
+        except Exception as e:
+            logger.warning(f"[재고요청] 자동 완료 처리 실패: {e}")
+        if done:
+            logger.info(f"[재고요청] {done}건 자동 완료 + 요청자 DM 발송")
+            await self.refresh_stock_panel()
+        return done
+
     async def stock_notice_queue_loop(self):
         """대시보드에서 등록한 입고 알림 대기열을 5초마다 처리"""
         await self.wait_until_ready()
@@ -984,6 +1029,10 @@ class VendingBot(commands.Bot):
         except Exception:
             pass
         logger.info(f"[재고요청] #{rid} 접수: {content[:60]}")
+        try:
+            await self.refresh_stock_panel()
+        except Exception:
+            pass
 
     async def get_charge_log_channel(self):
         """충전로그 채널 반환 (설정 키: charge_log_channel_id → 없으면 deposit_log_channel_id → admin_channel_id)"""
@@ -1682,6 +1731,12 @@ class VendingBot(commands.Bot):
                 await channel.send(content=mention_text or None, embed=embed, file=file)
             else:
                 await channel.send(content=mention_text or None, embed=embed)
+            # 대기 중인 재고 요청 자동 완료 + 요청자 DM
+            try:
+                await self.complete_stock_requests_for(product.get('name', ''))
+            except Exception as e:
+                logger.warning(f"[재고요청] 자동 완료 실패: {e}")
+
             logger.info(f"[입고알림] 전송 완료: {product['name']} +{key_count}개 (채널 {notice_channel_id})")
         except Exception as e:
             logger.error(f"Stock notice error: {e}")
@@ -2127,6 +2182,11 @@ async def _save_stock_request(interaction, product_name, qty, note=''):
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
     try:
+        await interaction.client.refresh_stock_panel()
+    except Exception:
+        pass
+
+    try:
         ch = await interaction.client.get_admin_alert_channel()
         if ch:
             await ch.send(f"📥 **재고 요청 #{rid}** · {_req_display_name(interaction.user)}\n"
@@ -2193,20 +2253,12 @@ class StockRequestPickSelect(discord.ui.Select):
         await interaction.response.send_modal(StockRequestQtyModal(product.get('name') or '상품'))
 
 
-class StockRequestManualButton(discord.ui.Button):
-    def __init__(self, row=1):
-        super().__init__(label="직접 입력", emoji="⌨️", style=discord.ButtonStyle.secondary,
-                         custom_id="stockreq_manual", row=row)
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(StockRequestManualModal())
-
-
 class StockRequestPickView(discord.ui.View):
+    """상품 선택 전용 (수동 입력 없음)"""
+
     def __init__(self, products):
         super().__init__(timeout=180)
         self.add_item(StockRequestPickSelect(products))
-        self.add_item(StockRequestManualButton())
 
 
 class StockRequestOpenButton(discord.ui.Button):
@@ -3953,7 +4005,9 @@ class VendingCommands(commands.Cog):
             await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
             return
         try:
-            await interaction.channel.send(view=StockRequestView())
+            msg = await interaction.channel.send(view=StockRequestView())
+            db.set_setting('stock_request_panel_channel_id', str(interaction.channel_id))
+            db.set_setting('stock_request_panel_message_id', str(msg.id))
         except Exception as e:
             logger.error(f"[패널] 재고요청 게시 실패: {e}")
             await interaction.response.send_message(f"게시 실패: {e}", ephemeral=True)
