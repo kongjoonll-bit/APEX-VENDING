@@ -1025,6 +1025,43 @@ class VendingBot(commands.Bot):
         # 일반 메시지 처리 (DM 포함 - 일반 채팅은 리뷰로 등록하지 않음)
         await self.process_commands(message)
 
+    async def notify_stock_request_admin(self, rid, username, product, qty=1, note=''):
+        """재고 요청 → 관리자에게 임베드 + 관리자 멘션으로 알림"""
+        cid = (str(db.get_setting('stock_request_channel_id', '') or '').strip()
+               or str(db.get_setting('admin_channel_id', '') or '').strip())
+        if not cid.isdigit():
+            logger.warning("[재고요청] 알림 채널 미설정")
+            return False
+        try:
+            ch = self.get_channel(int(cid)) or await self.fetch_channel(int(cid))
+        except Exception as e:
+            logger.warning(f"[재고요청] 채널 조회 실패: {e}")
+            return False
+        if ch is None:
+            return False
+
+        mentions = ""
+        try:
+            ids = [str(a['user_id']) for a in db.get_admins() if str(a['user_id']).isdigit()]
+            mentions = " ".join(f"<@{u}>" for u in ids[:5])
+        except Exception:
+            pass
+
+        emb = discord.Embed(title="📥 재고 요청 접수", color=brand_color('main'))
+        emb.add_field(name="요청자", value=str(username)[:80], inline=True)
+        emb.add_field(name="상품", value=str(product or '-')[:120], inline=True)
+        emb.add_field(name="수량", value=f"{qty}개", inline=True)
+        emb.add_field(name="요청번호", value=f"#{rid}", inline=True)
+        if note:
+            emb.add_field(name="요청사항", value=str(note)[:300], inline=False)
+        emb.set_footer(text=brand_tag('STOCK REQUEST'))
+        try:
+            await ch.send(content=mentions or None, embed=emb)
+            return True
+        except Exception as e:
+            logger.warning(f"[재고요청] 전송 실패: {e}")
+            return False
+
     async def handle_stock_request(self, message):
         """재고 요청 채널: 즉시 접수 답장 + DB 저장(관리자 대시보드 표시)"""
         content = (message.content or '').strip()
@@ -1051,13 +1088,9 @@ class VendingBot(commands.Bot):
                 pass
 
         try:
-            admin_ch = await self.get_admin_alert_channel()
-            if admin_ch:
-                await admin_ch.send(
-                    f"📥 **재고 요청 #{rid}** · {author_name} · <#{message.channel.id}>\n"
-                    f"> {content[:200] or '(내용 없음)'}")
-        except Exception:
-            pass
+            await self.notify_stock_request_admin(rid, author_name, content[:80], 1, content)
+        except Exception as e:
+            logger.warning(f"[재고요청] 관리자 알림 실패: {e}")
         logger.info(f"[재고요청] #{rid} 접수: {content[:60]}")
         try:
             await self.refresh_stock_panel()
@@ -1641,24 +1674,22 @@ class VendingBot(commands.Bot):
             inline=False)
         embed.set_footer(text=brand_tag('THANK YOU'))
 
-        # 웹 전달 페이지(링크 + PIN) + 사용법 링크
+        # 웹 전달 페이지 — 임베드 하나에 통합 (카드 이미지도 같은 임베드)
         delivery_content = ''
-        guide_link = ''
         try:
             dl = await self._attach_delivery_link(embed, order, key)
             if dl:
                 link, pin, guide = dl
-                guide_link = guide
-                delivery_content = (f"## 🍪 쿠키 전달 페이지\n"
-                                    f"**[▶ 지금 열기]({link})**\n"
-                                    f"### PIN `{pin}`\n\n"
-                                    f"**[📖 가이드 보기 (사용법)]({guide})**")
+                embed.clear_fields()
+                embed.title = "🍪 쿠키 전달 페이지"
+                embed.description = (f"[▶ 쿠키 전달 페이지 열기]({link})\n"
+                                     f"**PIN  {pin}**\n"
+                                     f"[📖 사용법 가이드 보기]({guide})")
+                embed.add_field(name="상품", value=order['product_name'], inline=True)
+                embed.add_field(name="결제", value=f"{order['amount']:,}원", inline=True)
+                embed.add_field(name="주문", value=f"#{order_id}", inline=True)
         except Exception as e:
             logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
-
-        if guide_link:
-            embed.add_field(name="📖 사용법",
-                            value=f"[가이드 보기]({guide_link})", inline=False)
 
         if card_png:
             await self.send_dm(order['user_id'], content=delivery_content or None,
@@ -1818,11 +1849,20 @@ class VendingBot(commands.Bot):
                 try:
                     db.mark_stock_request_done(req['id'], handled_by='auto')
                     done_count += 1
-                    await self.send_dm(
-                        req['user_id'],
-                        f"**요청하신 상품이 입고되었습니다!**\n\n"
-                        f"> {req.get('product_hint') or product['name']}\n\n"
-                        f"지금 자판기에서 바로 구매할 수 있어요.")
+                    r_emb = discord.Embed(
+                        title="🍪 입고 알림",
+                        description="요청하신 상품이 입고되었습니다.\n지금 자판기에서 구매하실 수 있어요.",
+                        color=brand_color('success'))
+                    r_emb.add_field(name="상품",
+                                    value=str(req.get('product_hint') or product['name'])[:200],
+                                    inline=True)
+                    r_emb.add_field(name="가격",
+                                    value=f"{int(product.get('price') or 0):,}원", inline=True)
+                    live_cid = str(db.get_setting('stock_channel_id', '') or '').strip()
+                    if live_cid.isdigit():
+                        r_emb.add_field(name="실시간 재고", value=f"<#{live_cid}>", inline=False)
+                    r_emb.set_footer(text=brand_tag('RESTOCK'))
+                    await self.send_dm(req['user_id'], embed=r_emb)
                 except Exception as e:
                     logger.warning(f"[재고요청] 자동완료/DM 실패 (#{req.get('id')}): {e}")
             if done_count:
@@ -2288,12 +2328,10 @@ async def _save_stock_request(interaction, product_name, qty, note=''):
         pass
 
     try:
-        ch = await interaction.client.get_admin_alert_channel()
-        if ch:
-            await ch.send(f"📥 **재고 요청 #{rid}** · {_req_display_name(interaction.user)}\n"
-                          f"> {product_name} ×{qty}" + (f" · {note[:100]}" if note else ""))
-    except Exception:
-        pass
+        await interaction.client.notify_stock_request_admin(
+            rid, _req_display_name(interaction.user), product_name, qty, note)
+    except Exception as e:
+        logger.warning(f"[재고요청] 관리자 알림 실패: {e}")
     return rid
 
 
@@ -3463,7 +3501,7 @@ class ConfirmBuyButton(discord.ui.Button):
             inline=False)
         embed.set_footer(text=dm_footer)
 
-        # 웹 전달 페이지(링크 + PIN) — DM 본문 상단에 크게 표시
+        # 웹 전달 페이지 — 임베드 하나에 통합 (큰 제목 + 링크 + PIN)
         try:
             dl = await interaction.client._attach_delivery_link(
                 embed,
@@ -3472,12 +3510,15 @@ class ConfirmBuyButton(discord.ui.Button):
                 key)
             if dl:
                 link, pin, guide = dl
-                big = (f"## 🍪 쿠키 전달 페이지\n"
-                       f"**[▶ 지금 열기]({link})**\n"
-                       f"### PIN `{pin}`\n\n"
-                       f"**[📖 가이드 보기 (사용법)]({guide})**")
-                content = f"{big}\n\n{content}" if content else big
-                embed.add_field(name="📖 사용법", value=f"[가이드 보기]({guide})", inline=False)
+                embed.clear_fields()
+                embed.title = "🍪 쿠키 전달 페이지"
+                embed.description = (f"[▶ 쿠키 전달 페이지 열기]({link})\n"
+                                     f"**PIN  {pin}**\n"
+                                     f"[📖 사용법 가이드 보기]({guide})")
+                embed.add_field(name="상품", value=self.product['name'], inline=True)
+                embed.add_field(name="결제", value=f"{final_price:,}P", inline=True)
+                embed.add_field(name="주문", value=f"#{order_id}", inline=True)
+                content = None
         except Exception as e:
             logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
 
