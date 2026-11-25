@@ -148,6 +148,14 @@ try:
 except Exception as _e:
     logger.warning(f"[DELIVERY] 등록 실패: {_e}")
 
+# 쿠키 사용법 페이지 (/guide)
+try:
+    import guide_page
+    guide_page.register(app)
+    logger.info("[GUIDE] 사용법 페이지 라우트 등록 완료")
+except Exception as _e:
+    logger.warning(f"[GUIDE] 등록 실패: {_e}")
+
 
 # ============ 한국 시간(KST) 표시 ============
 def to_kst(value):

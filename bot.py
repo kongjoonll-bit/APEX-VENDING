@@ -1638,7 +1638,11 @@ class VendingBot(commands.Bot):
         else:
             embed.add_field(name="▸ 결제 금액", value=f"**{order['amount']:,}원**", inline=True)
         # 쿠키 원문/파일은 DM으로 보내지 않음 → 웹 전달 페이지에서만 열람
-        embed.add_field(name="▸ 쿠키 수령", value="위 링크에서 PIN 입력 후 확인", inline=False)
+        embed.add_field(
+            name="🍪 쿠키 수령",
+            value="**위 링크 클릭 → PIN 입력 → 쿠키 복사**\n"
+                  "-# DM에는 쿠키가 포함되지 않습니다",
+            inline=False)
         embed.set_footer(text=brand_tag('THANK YOU'))
 
         # 웹 전달 페이지(링크 + PIN) — DM 본문 상단에 크게 표시
@@ -3435,7 +3439,11 @@ class ConfirmBuyButton(discord.ui.Button):
                 embed.add_field(name=f"▸ 할인 ({self.coupon['code']})", value=f"-{self.coupon['discount_amount']:,}P", inline=True)
             embed.add_field(name="▸ 결제 금액", value=f"**{final_price:,}P**", inline=True)
         # 쿠키 원문/파일은 DM으로 보내지 않음 → 웹 전달 페이지에서만 열람
-        embed.add_field(name="▸ 쿠키 수령", value="위 링크에서 PIN 입력 후 확인", inline=False)
+        embed.add_field(
+            name="🍪 쿠키 수령",
+            value="**위 링크 클릭 → PIN 입력 → 쿠키 복사**\n"
+                  "-# DM에는 쿠키가 포함되지 않습니다",
+            inline=False)
         embed.set_footer(text=dm_footer)
 
         # 웹 전달 페이지(링크 + PIN) — DM 본문 상단에 크게 표시
@@ -3461,14 +3469,14 @@ class ConfirmBuyButton(discord.ui.Button):
         new_balance = db.get_balance(str(interaction.user.id))
         
         discount_text = f"\n쿠폰 할인: -{self.coupon['discount_amount']:,}포인트 ({self.coupon['code']})" if self.coupon else ""
-        deliver_label = '웹 전달'
+        deliver_label = '🍪 쿠키는 DM 상단 링크에서 확인 (PIN 입력)'
         await interaction.response.edit_message(
             content=(
                 "**PURCHASE COMPLETE**\n\n"
                 f"> **상품** · {self.product['name']}\n"
                 f"> **결제** · {final_price:,}P{discount_text}\n"
                 f"> **잔액** · {new_balance:,}P\n"
-                f"> **{deliver_label}** · DM으로 전송되었습니다"
+                f"> **{deliver_label}**"
             ),
             embed=None, view=None
         )

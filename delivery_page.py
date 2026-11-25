@@ -174,6 +174,7 @@ TEMPLATE = """<!doctype html><html lang="ko"><head>
         <button class="btn green" onclick="copyCookie(this)">쿠키 복사</button>
         <button class="btn ghost" onclick="copyText(this, document.getElementById('cookie').innerText)">전체 복사</button>
         {% if has_file %}<a class="btn ghost" href="/p/{{ token }}/file">파일 다운로드</a>{% endif %}
+        <a class="btn ghost" href="/guide" target="_blank" rel="noopener">🍪 사용법</a>
       </div>
       <div class="hint">· 앞뒤 공백 없이 붙여넣으세요.</div>
     </div>
