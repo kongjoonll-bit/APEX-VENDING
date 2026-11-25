@@ -920,6 +920,14 @@
                         <input name="partner_category_id" value="{{ settings.get('partner_category_id','1564950954447736922') }}"
                                style="width:100%;margin-top:6px;padding:9px;border-radius:8px;border:1px solid rgba(148,163,184,.35)">
                     </label>
+                    <label style="font-size:13px">서버 입장 자동 역할 ID
+                        <input name="join_role_id" value="{{ settings.get('join_role_id','') }}"
+                               style="width:100%;margin-top:6px;padding:9px;border-radius:8px;border:1px solid rgba(148,163,184,.35)">
+                    </label>
+                    <label style="font-size:13px">후기 작성 보상 (포인트)
+                        <input name="review_reward_points" value="{{ settings.get('review_reward_points','0') }}"
+                               style="width:100%;margin-top:6px;padding:9px;border-radius:8px;border:1px solid rgba(148,163,184,.35)">
+                    </label>
                 </div>
                 <label style="font-size:13px;display:block;margin-bottom:8px">
                     <input type="checkbox" name="stock_notice_mention_role"

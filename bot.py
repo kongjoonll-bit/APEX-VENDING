@@ -443,6 +443,23 @@ class VendingBot(commands.Bot):
             return
         logger.error(f"[CMD] /{cmd} 처리 중 오류: {original!r}")
     
+    async def on_member_join(self, member):
+        """서버 입장 시 자동 역할 지급 (join_role_id → 없으면 purchase_role_id)"""
+        if member.bot:
+            return
+        try:
+            rid = str(db.get_setting('join_role_id', '') or '').strip()
+            if not rid:
+                rid = str(db.get_setting('purchase_role_id', '') or '').strip()
+            if not rid.isdigit():
+                return
+            role = member.guild.get_role(int(rid))
+            if role:
+                await member.add_roles(role, reason="서버 입장 자동 역할")
+                logger.info(f"[JOIN] {member} → {role.name} 자동 지급")
+        except Exception as e:
+            logger.warning(f"[JOIN] 역할 지급 실패: {e}")
+
     async def on_ready(self):
         logger.info(f"Bot logged in as {self.user} (ID: {self.user.id})")
         try:
@@ -1191,7 +1208,25 @@ class VendingBot(commands.Bot):
             
             # 후기 작성 완료 처리 (구매당 1개 제한)
             db.mark_order_reviewed(order_id)
-            
+
+            # 후기 작성 보상 (대시보드 설정값)
+            try:
+                reward = int(str(db.get_setting('review_reward_points', '0') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                reward = 0
+            if reward > 0:
+                try:
+                    new_bal = db.add_balance(
+                        str(user.id), user.name, reward, 'review_reward',
+                        f'후기 작성 보상 (주문 #{order_id})')
+                    await self.send_dm(
+                        user.id,
+                        f"**후기 작성 보상**\n\n+**{reward:,}P** 지급되었습니다.\n"
+                        f"현재 잔액: **{new_bal:,}P**")
+                    logger.info(f"[후기보상] {user} +{reward}P (주문 #{order_id})")
+                except Exception as e:
+                    logger.warning(f"[후기보상] 지급 실패: {e}")
+
             logger.info(f"Review registered from {user} for order #{order_id} ({rating} stars)")
             return True, "후기가 등록되었습니다!"
         except Exception as e:
@@ -1539,12 +1574,7 @@ class VendingBot(commands.Bot):
                 order.get('product_name') or '쿠키',
                 content=content_text, file_name=fname, file_data=fdata,
                 amount=order.get('amount') or 0)
-            link = f"{base}/p/{token}"
-            embed.add_field(
-                name="▸ 웹 전달 페이지",
-                value=f"[쿠키 받기 · 복사]({link})\n열 때 PIN `{pin}` 입력",
-                inline=False)
-            return link, pin
+            return f"{base}/p/{token}", pin
         except Exception as e:
             logger.warning(f"[DELIVERY] 링크 생성 실패: {e}")
             return None
@@ -1629,16 +1659,23 @@ class VendingBot(commands.Bot):
         key_file = None if card_png else add_key_fields_to_embed(embed, key)
         embed.set_footer(text=brand_tag('THANK YOU'))
 
-        # 웹 전달 페이지(링크 + PIN) 첨부
+        # 웹 전달 페이지(링크 + PIN) — DM 본문 상단에 크게 표시
+        delivery_content = ''
         try:
-            await self._attach_delivery_link(embed, order, key)
+            dl = await self._attach_delivery_link(embed, order, key)
+            if dl:
+                link, pin = dl
+                delivery_content = (f"## 🍪 쿠키 전달 페이지\n"
+                                    f"**[▶ 지금 열기]({link})**\n"
+                                    f"### PIN `{pin}`")
         except Exception as e:
             logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
 
         if card_png:
             await self.send_dm(order['user_id'], content=card_content, embed=embed, files=card_files)
         else:
-            await self.send_dm(order['user_id'], embed=embed, file=key_file)
+            await self.send_dm(order['user_id'], content=delivery_content or None,
+                               embed=embed, file=key_file)
         await self.refresh_vending_machines()
         
         sent_file = (card_key_file is not None) if card_png else (key_file is not None)
@@ -1791,6 +1828,12 @@ class VendingBot(commands.Bot):
                 await self.complete_stock_requests_for(product.get('name', ''))
             except Exception as e:
                 logger.warning(f"[재고요청] 자동 완료 실패: {e}")
+
+            # 실시간 재고 보드 즉시 갱신 (입고 직후)
+            try:
+                await self.refresh_stock_board()
+            except Exception as e:
+                logger.warning(f"[재고보드] 입고 후 갱신 실패: {e}")
 
             logger.info(f"[입고알림] 전송 완료: {product['name']} +{key_count}개 (채널 {notice_channel_id})")
         except Exception as e:
@@ -2314,8 +2357,7 @@ class StockRequestOpenButton(discord.ui.Button):
             await interaction.response.send_message("등록된 상품이 없습니다.", ephemeral=True)
             return
         embed = discord.Embed(title="재고 요청", color=brand_color('main'),
-                              description="요청할 **상품**을 고르고 **수량**을 입력해주세요.\n"
-                                          "-# 목록에 없는 쿠키는 **직접 입력** 버튼을 사용하세요.")
+                              description="요청할 **상품**을 고르고 **수량**을 입력해주세요.")
         await interaction.response.send_message(embed=embed, view=StockRequestPickView(products),
                                                 ephemeral=True)
 
@@ -3412,13 +3454,19 @@ class ConfirmBuyButton(discord.ui.Button):
                 files.append(key_file)
             embed.set_footer(text=dm_footer)
 
-        # 웹 전달 페이지(링크 + PIN) 첨부
+        # 웹 전달 페이지(링크 + PIN) — DM 본문 상단에 크게 표시
         try:
-            await interaction.client._attach_delivery_link(
+            dl = await interaction.client._attach_delivery_link(
                 embed,
                 {'id': order_id, 'user_id': interaction.user.id,
                  'product_name': self.product['name'], 'amount': final_price},
                 key)
+            if dl:
+                link, pin = dl
+                big = (f"## 🍪 쿠키 전달 페이지\n"
+                       f"**[▶ 지금 열기]({link})**\n"
+                       f"### PIN `{pin}`")
+                content = f"{big}\n\n{content}" if content else big
         except Exception as e:
             logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
 

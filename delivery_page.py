@@ -175,14 +175,12 @@ TEMPLATE = """<!doctype html><html lang="ko"><head>
         <button class="btn ghost" onclick="copyText(this, document.getElementById('cookie').innerText)">전체 복사</button>
         {% if has_file %}<a class="btn ghost" href="/p/{{ token }}/file">파일 다운로드</a>{% endif %}
       </div>
-      <div class="hint">· 붙여넣을 때 <b>앞뒤 공백</b>이 섞이지 않게 해주세요.<br>
-        · 위 계정/게임 정보는 참고용이며 지우지 않아도 됩니다.</div>
+      <div class="hint">· 앞뒤 공백 없이 붙여넣으세요.</div>
     </div>
     {% endif %}
   </div>
 
-  <div class="foot">APEX VENDING · 이 링크와 PIN은 타인과 공유하지 마세요.<br>
-    문의는 디스코드 자판기의 <b>정보</b> 버튼을 이용해주세요.</div>
+  <div class="foot">APEX VENDING · 이 링크와 PIN은 타인과 공유하지 마세요.</div>
 </div>
 
 <div class="toast" id="toast"></div>

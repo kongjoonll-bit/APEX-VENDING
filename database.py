@@ -68,6 +68,8 @@ DEFAULT_SETTINGS = {
     'partner_panel_channel_id': '',          # 파트너 패널 채널 (숨김 예외)
     'stock_request_channel_id': '',          # 재고요청 채널
     'stock_notice_mention_role': 'true',     # 입고알림에 재고핑 역할 멘션
+    'review_reward_points': '0',             # 후기 작성 보상 포인트 (0=지급 안 함)
+    'join_role_id': '',                      # 서버 입장 시 자동 지급 역할
     # 파트너 카테고리에서 숨기지 않을 채널 (콤마 구분)
     'partner_panel_channel_ids': '1564964569628020907,1574726845860020387',
     # 파트너 알림 끄면 숨길 채널 목록 (대시보드에서 추가/삭제, 공백·콤마 구분)
