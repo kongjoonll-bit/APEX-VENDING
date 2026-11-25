@@ -1514,6 +1514,41 @@ class VendingBot(commands.Bot):
         thread.start()
         return thread
     
+    async def _attach_delivery_link(self, embed, order, key):
+        """구매 1건당 웹 전달 페이지(링크 + PIN)를 임베드에 첨부"""
+        try:
+            base = (db.get_setting('dashboard_url', '') or '').strip().rstrip('/')
+            if not base or embed is None:
+                return None
+
+            content_text, fname, fdata = '', '', None
+            if key:
+                if (key.get('file_size') or 0) > 0:
+                    got = db.get_key_file(key['id'])
+                    if got:
+                        fname, fdata = got
+                        try:
+                            content_text = fdata.decode('utf-8', errors='ignore')
+                        except Exception:
+                            content_text = ''
+                else:
+                    content_text = (key.get('key_value') or '').strip()
+
+            token, pin = db.create_delivery(
+                order.get('id') or 0, order.get('user_id') or '',
+                order.get('product_name') or '쿠키',
+                content=content_text, file_name=fname, file_data=fdata,
+                amount=order.get('amount') or 0)
+            link = f"{base}/p/{token}"
+            embed.add_field(
+                name="▸ 웹 전달 페이지",
+                value=f"[쿠키 받기 · 복사]({link})\n열 때 PIN `{pin}` 입력",
+                inline=False)
+            return link, pin
+        except Exception as e:
+            logger.warning(f"[DELIVERY] 링크 생성 실패: {e}")
+            return None
+
     async def send_dm(self, user_id, content=None, embed=None, file=None, files=None):
         """DM 전송 (embed + 파일 첨부(단일/다중) 동시 지원)"""
         try:
@@ -1593,7 +1628,13 @@ class VendingBot(commands.Bot):
             embed.add_field(name="▸ 결제 금액", value=f"**{order['amount']:,}원**", inline=True)
         key_file = None if card_png else add_key_fields_to_embed(embed, key)
         embed.set_footer(text=brand_tag('THANK YOU'))
-        
+
+        # 웹 전달 페이지(링크 + PIN) 첨부
+        try:
+            await self._attach_delivery_link(embed, order, key)
+        except Exception as e:
+            logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
+
         if card_png:
             await self.send_dm(order['user_id'], content=card_content, embed=embed, files=card_files)
         else:
@@ -3370,6 +3411,16 @@ class ConfirmBuyButton(discord.ui.Button):
             if key_file:
                 files.append(key_file)
             embed.set_footer(text=dm_footer)
+
+        # 웹 전달 페이지(링크 + PIN) 첨부
+        try:
+            await interaction.client._attach_delivery_link(
+                embed,
+                {'id': order_id, 'user_id': interaction.user.id,
+                 'product_name': self.product['name'], 'amount': final_price},
+                key)
+        except Exception as e:
+            logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
 
         await interaction.client.send_dm(
             interaction.user.id, content=content, embed=embed, files=files

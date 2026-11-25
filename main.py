@@ -140,6 +140,14 @@ def _fire_stock_notice(product, count):
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'apex-vending-secret-key-change-me')
 
+# 구매 후 웹 전달 페이지 (/p/<token>) — PIN 보호 + 복사 버튼
+try:
+    import delivery_page
+    delivery_page.register(app)
+    logger.info("[DELIVERY] 웹 전달 페이지 라우트 등록 완료")
+except Exception as _e:
+    logger.warning(f"[DELIVERY] 등록 실패: {_e}")
+
 
 # ============ 한국 시간(KST) 표시 ============
 def to_kst(value):

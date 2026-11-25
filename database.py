@@ -1401,6 +1401,68 @@ def get_tier_discount(user_id):
     return int(tier['discount']) if tier else 0
 
 
+# ============ DELIVERIES (구매 후 웹 전달 페이지 / PIN 보호) ============
+def _ensure_deliveries_table(c):
+    c.execute('''CREATE TABLE IF NOT EXISTS deliveries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT UNIQUE NOT NULL,
+        pin TEXT NOT NULL,
+        order_id INTEGER DEFAULT 0,
+        user_id TEXT DEFAULT '',
+        product_name TEXT DEFAULT '',
+        amount INTEGER DEFAULT 0,
+        content TEXT DEFAULT '',
+        file_name TEXT DEFAULT '',
+        file_data BLOB,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+
+def create_delivery(order_id, user_id, product_name, content='', file_name='',
+                    file_data=None, amount=0):
+    """구매 1건당 웹 전달 페이지 생성 → (token, pin)"""
+    import secrets
+    token = secrets.token_urlsafe(18)
+    pin = ''.join(secrets.choice('0123456789') for _ in range(6))
+
+    conn = get_conn()
+    c = conn.cursor()
+    _ensure_deliveries_table(c)
+    c.execute(
+        'INSERT INTO deliveries (token, pin, order_id, user_id, product_name, amount, '
+        'content, file_name, file_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (token, pin, int(order_id or 0), str(user_id or ''), product_name or '',
+         int(amount or 0), content or '', file_name or '',
+         sqlite3.Binary(file_data) if file_data else None)
+    )
+    conn.commit()
+    conn.close()
+    return token, pin
+
+
+def get_delivery(token):
+    conn = get_conn()
+    c = conn.cursor()
+    _ensure_deliveries_table(c)
+    c.execute('SELECT * FROM deliveries WHERE token=?', (token,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_delivery_file(token):
+    """전달 페이지의 첨부 파일 → (name, bytes) 또는 None"""
+    conn = get_conn()
+    c = conn.cursor()
+    _ensure_deliveries_table(c)
+    c.execute('SELECT file_name, file_data FROM deliveries WHERE token=?', (token,))
+    row = c.fetchone()
+    conn.close()
+    if not row or not row['file_data']:
+        return None
+    return (row['file_name'] or 'file.txt'), bytes(row['file_data'])
+
+
 # ============ ADMINS ============
 def add_admin(user_id, username):
     conn = get_conn()
