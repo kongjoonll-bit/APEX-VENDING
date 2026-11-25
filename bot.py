@@ -473,6 +473,10 @@ class VendingBot(commands.Bot):
         if not getattr(self, '_notice_queue_started', False):
             self._notice_queue_started = True
             self.loop.create_task(self.stock_notice_queue_loop())
+        # 봇 생존 신호(하트비트) 30초 갱신
+        if not getattr(self, '_heartbeat_started', False):
+            self._heartbeat_started = True
+            self.loop.create_task(self.heartbeat_loop())
         # 재고 보드 30분 주기 갱신
         if not getattr(self, '_stock_board_started', False):
             self._stock_board_started = True
@@ -680,6 +684,15 @@ class VendingBot(commands.Bot):
         except Exception as e:
             logger.error(f"[쿠키검사] 알림 전송 실패: {e}")
     
+    async def heartbeat_loop(self):
+        """봇 생존 신호 갱신 (30초) — 대시보드/웹의 봇 온라인 판정용"""
+        while not self.is_closed():
+            try:
+                db.set_setting('bot_heartbeat', str(int(time.time())))
+            except Exception:
+                pass
+            await asyncio.sleep(30)
+
     async def refresh_stock_panel(self):
         """재고 요청 패널 메시지를 최신 대기 건수로 갱신"""
         ch_id = str(db.get_setting('stock_request_panel_channel_id', '') or '').strip()
@@ -1687,6 +1700,7 @@ class VendingBot(commands.Bot):
             mention_text = " ".join(mention_parts)
 
             desc = f"{live_ref}\n\n원하는 쿠키가 있다면 {req_ref}"
+            desc += f"\n-# 입고 +{key_count}개 · 현재 {total_stock}개 · {int(product.get('price') or 0):,}원"
             if extra_note:
                 desc += f"\n\n> {extra_note}"
 
@@ -2212,19 +2226,6 @@ class StockRequestQtyModal(discord.ui.Modal, title="재고 요청"):
             qty = 1
         await _save_stock_request(interaction, self.product_name, qty,
                                   str(self.note.value or '').strip())
-
-
-class StockRequestManualModal(discord.ui.Modal, title="재고 요청 · 직접 입력"):
-    product = discord.ui.TextInput(label="상품명", placeholder="예: 배구전설쿠키", max_length=100)
-    qty = discord.ui.TextInput(label="필요한 수량", placeholder="예: 2", max_length=3, default="1")
-
-    async def on_submit(self, interaction: discord.Interaction):
-        name = str(self.product.value).strip() or '기타'
-        try:
-            qty = max(1, int(str(self.qty.value).strip() or 1))
-        except (TypeError, ValueError):
-            qty = 1
-        await _save_stock_request(interaction, name, qty)
 
 
 class StockRequestPickSelect(discord.ui.Select):
@@ -4321,7 +4322,7 @@ class VendingCommands(commands.Cog):
             return
         
         db.set_setting('vending_desc', text)
-        await interaction.response.send_message(f"자판기 설명이 변경되었습니다!", ephemeral=True)
+        await interaction.response.send_message("자판기 설명이 변경되었습니다!", ephemeral=True)
         await self.bot.refresh_vending_machines()
     
     @app_commands.command(name="자판기푸터", description="[관리자] 자판기 하단 문구를 변경합니다")
@@ -4384,7 +4385,7 @@ class VendingCommands(commands.Cog):
             return
         
         db.set_setting('purchase_dm_desc', text)
-        await interaction.response.send_message(f"구매 완료 DM 설명이 변경되었습니다!", ephemeral=True)
+        await interaction.response.send_message("구매 완료 DM 설명이 변경되었습니다!", ephemeral=True)
     
     @app_commands.command(name="구매메시지푸터", description="[관리자] 구매 완료 DM 하단 문구를 변경합니다")
     @app_commands.describe(text="새 DM 하단 문구")

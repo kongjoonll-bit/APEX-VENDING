@@ -255,8 +255,7 @@ def init_db():
 # 재고 파일 맨 앞에 붙는 안내문을 자동 제거한다.
 #   예) "Инструкция - @cookiestock_faq"
 _NOISE_MARKERS = ('инструкция', 'cookiestock_faq', 'instrukciya')
-_NOISE_SCAN_LINES = 6          # 상단 몇 줄까지만 검사
-_STOCK_BRAND_NAME_PLACEHOLDER = None
+_NOISE_SCAN_LINES = 6          # (호환용) 사용되지 않음
 STOCK_BRAND_NAME = 'Apex로블쿠키'   # 안내문 대체 문구 / 지급 파일명
 
 # 'Инструкция - @cookiestock_faq' **문구만** 'Apex로블쿠키'로 치환한다.
