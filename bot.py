@@ -2627,9 +2627,7 @@ class VendingButton(discord.ui.Button):
             return False
 
     async def show_products(self, interaction):
-        # defer 먼저 호출하여 interaction 3초 제한 초과 방지 (429/만료는 무시)
-        if not await self._safe_defer(interaction):
-            return
+        # 응답은 defer 없이 즉시 전송 (충전/문의 버튼과 동일한 방식)
 
         # 카테고리가 있으면 항상 카테고리 선택 화면을 먼저 보여준다 (설정값과 무관)
         try:
@@ -2645,7 +2643,7 @@ class VendingButton(discord.ui.Button):
                 color=brand_color('main')
             )
             embed.set_footer(text=brand_tag('CATALOG'))
-            await interaction.followup.send(embed=embed, view=CategoryPickView(cats), ephemeral=True)
+            await interaction.response.send_message(embed=embed, view=CategoryPickView(cats), ephemeral=True)
             return
 
         products = db.get_products(active_only=True)
@@ -2701,7 +2699,7 @@ class VendingButton(discord.ui.Button):
                     )
         
         embed.set_footer(text=brand_tag('CATALOG'))
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     
     async def show_charge(self, interaction):
         # 계좌 정보는 숨기고 충전 신청 버튼만 표시
@@ -2723,13 +2721,10 @@ class VendingButton(discord.ui.Button):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     
     async def show_buy_menu(self, interaction):
-        # defer 먼저 호출하여 interaction 3초 제한 초과 방지
-        await interaction.response.defer(ephemeral=True)
-        
         products = db.get_products(active_only=True)
         
         if not products:
-            await interaction.followup.send("현재 구매할 수 있는 상품이 없습니다.", ephemeral=True)
+            await interaction.response.send_message("현재 구매할 수 있는 상품이 없습니다.", ephemeral=True)
             return
         
         # Check balance
@@ -2776,12 +2771,9 @@ class VendingButton(discord.ui.Button):
                     inline=False
                 )
         
-        await interaction.followup.send(embed=embed, view=BuyProductView(products), ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=BuyProductView(products), ephemeral=True)
     
     async def show_info(self, interaction):
-        # defer 먼저 호출하여 interaction 3초 제한 초과 방지
-        await interaction.response.defer(ephemeral=True)
-        
         user = db.get_or_create_user(str(interaction.user.id), interaction.user.name)
         balance = user['balance']
         
@@ -2845,7 +2837,7 @@ class VendingButton(discord.ui.Button):
             embed.add_field(name="▸ 최근 거래", value="거래 내역이 없습니다.", inline=False)
         
         embed.set_footer(text=brand_tag('ACCOUNT'))
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
     
     async def show_ticket(self, interaction):
         """문의 티켓 생성 (모든 유저 이용 가능)"""
