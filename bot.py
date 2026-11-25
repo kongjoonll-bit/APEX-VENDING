@@ -407,7 +407,8 @@ class VendingBot(commands.Bot):
         #   NotFound(10062, Unknown interaction)가 트레이스백으로 터지지 않게 한다.
         self.tree.on_error = self.on_app_command_error
         # 영구 UI 패널 등록 (봇 재시작 후에도 버튼이 동작하도록)
-        for _view in (StockPingView(), StockRequestView(), PartnerPingView()):
+        for _view in (VendingMainView(), StockPingView(), StockRequestView(),
+                      PartnerPingView(), InquiryPanelView()):
             try:
                 self.add_view(_view)
             except Exception as _e:
