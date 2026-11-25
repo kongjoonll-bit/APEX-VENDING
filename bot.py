@@ -1782,9 +1782,6 @@ class VendingBot(commands.Bot):
             role_id = str(db.get_setting('stock_ping_role_id', '') or '').strip()
             if role_id and str(db.get_setting('stock_notice_mention_role', 'true')).lower() == 'true':
                 mention_parts.append(f"<@&{role_id}>")
-            partner_id = str(db.get_setting('partner_role_id', '') or '').strip()
-            if partner_id and str(db.get_setting('stock_notice_mention_role', 'true')).lower() == 'true':
-                mention_parts.append(f"<@&{partner_id}>")
 
             matched_requests = []
             try:
