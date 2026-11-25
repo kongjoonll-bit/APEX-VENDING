@@ -1514,19 +1514,8 @@ class VendingBot(commands.Bot):
         try:
             user = await self.fetch_user(int(user_id))
             
-            embed = discord.Embed(
-                title="구매 완료 & 후기 요청",
-                description=f"**{product_name}** 구매가 완료되었습니다! \n\n"
-                           f"만족하셨다면 아래 **[후기 작성]** 버튼을 눌러\n"
-                           f"별점과 함께 후기를 남겨주세요!",
-                color=brand_color('main')
-            )
-            embed.add_field(name="주문번호", value=f"#{order_id}", inline=True)
-            embed.add_field(name="상품", value=product_name, inline=True)
-            embed.set_footer(text=brand_tag('REVIEW · 후기는 리뷰 채널에 자동 등록됩니다'))
-            
             view = ReviewRequestView(order_id, product_name)
-            await user.send(embed=embed, view=view)
+            await user.send(view=view)
             return True
         except Exception as e:
             logger.error(f"Review request DM error: {e}")
@@ -1642,21 +1631,14 @@ class VendingBot(commands.Bot):
             description=product_row.get('description', '')
         )
         card_files = []
-        card_content = None
-        card_key_file = None
         if card_png:
             card_files.append(discord.File(io.BytesIO(card_png), filename='receipt.png'))
             embed = discord.Embed(color=brand_color('success'))
             embed.set_image(url='attachment://receipt.png')
-            embed.set_footer(text=brand_tag('THANK YOU'))
-            card_key_file = build_key_attachment(key)
-            if card_key_file:
-                card_files.append(card_key_file)
-            elif (key.get('key_value') or '').strip():
-                card_content = "**YOUR KEY**\n```\n%s\n```" % key['key_value']
         else:
             embed.add_field(name="▸ 결제 금액", value=f"**{order['amount']:,}원**", inline=True)
-        key_file = None if card_png else add_key_fields_to_embed(embed, key)
+        # 쿠키 원문/파일은 DM으로 보내지 않음 → 웹 전달 페이지에서만 열람
+        embed.add_field(name="▸ 쿠키 수령", value="위 링크에서 PIN 입력 후 확인", inline=False)
         embed.set_footer(text=brand_tag('THANK YOU'))
 
         # 웹 전달 페이지(링크 + PIN) — DM 본문 상단에 크게 표시
@@ -1672,10 +1654,10 @@ class VendingBot(commands.Bot):
             logger.warning(f"[DELIVERY] 링크 첨부 실패: {e}")
 
         if card_png:
-            await self.send_dm(order['user_id'], content=card_content, embed=embed, files=card_files)
-        else:
             await self.send_dm(order['user_id'], content=delivery_content or None,
-                               embed=embed, file=key_file)
+                               embed=embed, files=card_files)
+        else:
+            await self.send_dm(order['user_id'], content=delivery_content or None, embed=embed)
         await self.refresh_vending_machines()
         
         sent_file = (card_key_file is not None) if card_png else (key_file is not None)
@@ -2338,12 +2320,18 @@ class StockRequestPickSelect(discord.ui.Select):
         await interaction.response.send_modal(StockRequestQtyModal(product.get('name') or '상품'))
 
 
-class StockRequestPickView(discord.ui.View):
-    """상품 선택 전용 (수동 입력 없음)"""
+class StockRequestPickView(ui.LayoutView):
+    """상품 선택 전용 (버튼/선택창이 컨테이너 안에 포함)"""
 
     def __init__(self, products):
         super().__init__(timeout=180)
-        self.add_item(StockRequestPickSelect(products))
+        children = [
+            ui.TextDisplay("# 재고 요청"),
+            ui.Separator(),
+            ui.TextDisplay("요청할 **상품**을 선택하면 수량 입력창이 열립니다."),
+            ui.ActionRow(StockRequestPickSelect(products)),
+        ]
+        self.add_item(ui.Container(*children, accent_color=brand_color('main')))
 
 
 class StockRequestOpenButton(discord.ui.Button):
@@ -2356,9 +2344,7 @@ class StockRequestOpenButton(discord.ui.Button):
         if not products:
             await interaction.response.send_message("등록된 상품이 없습니다.", ephemeral=True)
             return
-        embed = discord.Embed(title="재고 요청", color=brand_color('main'),
-                              description="요청할 **상품**을 고르고 **수량**을 입력해주세요.")
-        await interaction.response.send_message(embed=embed, view=StockRequestPickView(products),
+        await interaction.response.send_message(view=StockRequestPickView(products),
                                                 ephemeral=True)
 
 
@@ -2957,13 +2943,18 @@ class CloseTicketButton(discord.ui.Button):
             pass
 
 
-class ReviewRequestView(discord.ui.View):
-    """후기 작성 버튼 뷰 (DM용)"""
+class ReviewRequestView(ui.LayoutView):
+    """후기 작성 버튼 (DM · 컨테이너 안에 버튼 포함)"""
+
     def __init__(self, order_id, product_name):
         super().__init__(timeout=None)
-        self.order_id = order_id
-        self.product_name = product_name
-        self.add_item(ReviewButton(order_id, product_name))
+        children = [
+            ui.TextDisplay(f"# 후기 작성\n**{product_name}** 은 어떠셨나요?"),
+            ui.Separator(),
+            ui.TextDisplay(f"주문 `#{order_id}`\n-# 작성하신 후기는 리뷰 채널에 자동 등록됩니다."),
+            ui.ActionRow(ReviewButton(order_id, product_name)),
+        ]
+        self.add_item(ui.Container(*children, accent_color=brand_color('main')))
 
 
 class ChargeApproveView(discord.ui.View):
@@ -3427,16 +3418,10 @@ class ConfirmBuyButton(discord.ui.Button):
 
         files = []
         content = None
-        key_file = build_key_attachment(key)
         if card_png:
             files.append(discord.File(io.BytesIO(card_png), filename='receipt.png'))
             embed = discord.Embed(color=brand_color('success'))
             embed.set_image(url='attachment://receipt.png')
-            embed.set_footer(text=dm_footer)
-            if key_file:
-                files.append(key_file)
-            elif (key.get('key_value') or '').strip():
-                content = "**YOUR KEY**\n```\n%s\n```" % key['key_value']
         else:
             embed = discord.Embed(
                 title=dm_title,
@@ -3449,10 +3434,9 @@ class ConfirmBuyButton(discord.ui.Button):
                 embed.add_field(name="▸ 원래 가격", value=f"{self.product['price']:,}P", inline=True)
                 embed.add_field(name=f"▸ 할인 ({self.coupon['code']})", value=f"-{self.coupon['discount_amount']:,}P", inline=True)
             embed.add_field(name="▸ 결제 금액", value=f"**{final_price:,}P**", inline=True)
-            key_file = add_key_fields_to_embed(embed, key)
-            if key_file:
-                files.append(key_file)
-            embed.set_footer(text=dm_footer)
+        # 쿠키 원문/파일은 DM으로 보내지 않음 → 웹 전달 페이지에서만 열람
+        embed.add_field(name="▸ 쿠키 수령", value="위 링크에서 PIN 입력 후 확인", inline=False)
+        embed.set_footer(text=dm_footer)
 
         # 웹 전달 페이지(링크 + PIN) — DM 본문 상단에 크게 표시
         try:
@@ -3477,7 +3461,7 @@ class ConfirmBuyButton(discord.ui.Button):
         new_balance = db.get_balance(str(interaction.user.id))
         
         discount_text = f"\n쿠폰 할인: -{self.coupon['discount_amount']:,}포인트 ({self.coupon['code']})" if self.coupon else ""
-        deliver_label = 'FILE' if key_file else 'KEY'
+        deliver_label = '웹 전달'
         await interaction.response.edit_message(
             content=(
                 "**PURCHASE COMPLETE**\n\n"
@@ -3753,13 +3737,28 @@ class InquiryModal(discord.ui.Modal, title="문의 접수"):
             await interaction.followup.send(f"문의 접수에 실패했습니다: {ex}", ephemeral=True)
 
 
-class InquiryPanelView(discord.ui.View):
+class InquiryOpenButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="문의하기", emoji="💬", style=discord.ButtonStyle.primary,
+                         custom_id="inquiry_open_btn")
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(InquiryModal())
+
+
+class InquiryPanelView(ui.LayoutView):
+    """문의 패널 (버튼이 컨테이너 안에 포함)"""
+
     def __init__(self):
         super().__init__(timeout=None)
-
-    @discord.ui.button(label="문의하기", style=discord.ButtonStyle.primary, custom_id="inquiry_open_btn")
-    async def open_modal(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(InquiryModal())
+        children = [
+            ui.TextDisplay("# 문의"),
+            ui.Separator(),
+            ui.TextDisplay("불량·교환·기타 문의를 남겨주세요.\n"
+                           "접수된 문의는 비공개 채널에서 처리됩니다."),
+            ui.ActionRow(InquiryOpenButton()),
+        ]
+        self.add_item(ui.Container(*children, accent_color=brand_color('main')))
 
 
 class VendingCommands(commands.Cog):
@@ -3780,13 +3779,7 @@ class VendingCommands(commands.Cog):
             await interaction.response.send_message("관리자만 사용할 수 있습니다.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True)
-        embed = discord.Embed(
-            title="문의 접수",
-            description="아래 **문의하기** 버튼을 눌러 문의 내용을 작성해 주세요.\n접수된 문의는 비공개 채널에서 처리됩니다.",
-            color=brand_color('main')
-        )
-        embed.set_footer(text=brand_tag('INQUIRY'))
-        await interaction.channel.send(embed=embed, view=InquiryPanelView())
+        await interaction.channel.send(view=InquiryPanelView())
         await interaction.followup.send("문의 패널을 생성했습니다.", ephemeral=True)
 
     @app_commands.command(name="자판기설정", description="[관리자] 현재 채널에 버튼 자판기를 설치합니다")
