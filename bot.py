@@ -1026,14 +1026,11 @@ class VendingBot(commands.Bot):
         await self.process_commands(message)
 
     async def notify_stock_request_admin(self, rid, username, product, qty=1, note=''):
-        """재고 요청 → 관리자 채널 + 재고요청 채널 양쪽에 임베드 + 관리자 멘션"""
-        targets = []
-        for key in ('admin_channel_id', 'stock_request_channel_id'):
-            cid = str(db.get_setting(key, '') or '').strip()
-            if cid.isdigit() and cid not in targets:
-                targets.append(cid)
-        if not targets:
-            logger.error("[재고요청] 알림 채널 미설정 (admin_channel_id / stock_request_channel_id)")
+        """재고 요청 알림 → 재고요청 채널 (없으면 관리자 채널)에 임베드 + 관리자 멘션"""
+        cid = (str(db.get_setting('stock_request_channel_id', '') or '').strip()
+               or str(db.get_setting('admin_channel_id', '') or '').strip())
+        if not cid.isdigit():
+            logger.error("[재고요청] 알림 채널 미설정 (stock_request_channel_id)")
             return False
 
         mentions = ""
@@ -1052,23 +1049,21 @@ class VendingBot(commands.Bot):
             emb.add_field(name="요청사항", value=str(note)[:300], inline=False)
         emb.set_footer(text=brand_tag('STOCK REQUEST'))
 
-        sent_any = False
-        for cid in targets:
-            try:
-                ch = self.get_channel(int(cid)) or await self.fetch_channel(int(cid))
-            except Exception as e:
-                logger.error(f"[재고요청] 채널 조회 실패 {cid}: {e}")
-                continue
-            if ch is None:
-                logger.error(f"[재고요청] 채널 없음 {cid}")
-                continue
-            try:
-                await ch.send(content=mentions or None, embed=emb)
-                sent_any = True
-                logger.info(f"[재고요청] 알림 전송 완료 #{rid} → {cid}")
-            except Exception as e:
-                logger.error(f"[재고요청] 전송 실패 {cid}: {e}")
-        return sent_any
+        try:
+            ch = self.get_channel(int(cid)) or await self.fetch_channel(int(cid))
+        except Exception as e:
+            logger.error(f"[재고요청] 채널 조회 실패 {cid}: {e}")
+            return False
+        if ch is None:
+            logger.error(f"[재고요청] 채널 없음 {cid}")
+            return False
+        try:
+            await ch.send(content=mentions or None, embed=emb)
+            logger.info(f"[재고요청] 알림 전송 완료 #{rid} → {cid}")
+            return True
+        except Exception as e:
+            logger.error(f"[재고요청] 전송 실패 {cid}: {e}")
+            return False
 
     async def handle_stock_request(self, message):
         """재고 요청 채널: 즉시 접수 답장 + DB 저장(관리자 대시보드 표시)"""
