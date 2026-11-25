@@ -713,6 +713,8 @@ class VendingBot(commands.Bot):
 
     async def refresh_stock_panel(self):
         """재고 요청 패널 메시지를 최신 대기 건수로 갱신"""
+        if self._is_rate_limited():
+            return
         ch_id = str(db.get_setting('stock_request_panel_channel_id', '') or '').strip()
         msg_id = str(db.get_setting('stock_request_panel_message_id', '') or '').strip()
         if not (ch_id.isdigit() and msg_id.isdigit()):
@@ -1028,6 +1030,9 @@ class VendingBot(commands.Bot):
 
     async def notify_stock_request_admin(self, rid, username, product, qty=1, note=''):
         """재고 요청 알림 → 재고요청 채널 (없으면 관리자 채널)에 임베드 + 관리자 멘션"""
+        if self._is_rate_limited():
+            logger.warning("[재고요청] 레이트리밋 백오프 중 → 알림 보류")
+            return False
         cid = (str(db.get_setting('stock_request_channel_id', '') or '').strip()
                or str(db.get_setting('admin_channel_id', '') or '').strip())
         if not cid.isdigit():
@@ -1602,6 +1607,11 @@ class VendingBot(commands.Bot):
             return None
 
     async def send_dm(self, user_id, content=None, embed=None, file=None, files=None):
+        # Cloudflare 1015 / 429 백오프 중에는 API 호출을 아예 하지 않는다 (차단 악화 방지)
+        if self._is_rate_limited():
+            logger.warning(f"[DM] 레이트리밋 백오프 중 → 발송 보류 ({user_id})")
+            return False
+
         """DM 전송 (embed + 파일 첨부(단일/다중) 동시 지원)"""
         try:
             user = await self.fetch_user(int(user_id))
@@ -1759,6 +1769,9 @@ class VendingBot(commands.Bot):
         """재고(키) 입고 시 입고 채널에 카드 이미지 + 임베드 전송"""
         stock_channel_id = (db.get_setting('stock_channel_id', '') or '').strip()   # 실시간 재고(링크용)
         notice_channel_id = (db.get_setting('stock_notice_channel_id', '') or stock_channel_id).strip()
+        if self._is_rate_limited():
+            logger.warning("[입고알림] 레이트리밋 백오프 중 → 알림 보류")
+            return
         if not notice_channel_id:
             logger.warning("[입고알림] 입고 알림 채널이 미설정입니다 → 대시보드 '입고 알림 채널 ID'를 저장하세요.")
             return
@@ -3772,6 +3785,13 @@ class InquiryModal(discord.ui.Modal, title="문의 접수"):
     reason = discord.ui.TextInput(label="문의 내용", style=discord.TextStyle.paragraph,
                                   placeholder="문의 내용을 자세히 적어주세요", required=True, max_length=1000)
 
+    @staticmethod
+    async def _safe_followup(interaction, text):
+        try:
+            await interaction.followup.send(text, ephemeral=True)
+        except Exception as e:
+            logger.warning(f"[INQUIRY] 응답 전송 실패(무시): {e}")
+
     async def on_submit(self, interaction: discord.Interaction):
         try:
             await interaction.response.defer(ephemeral=True)
@@ -3780,7 +3800,7 @@ class InquiryModal(discord.ui.Modal, title="문의 접수"):
         category_id = (db.get_setting('ticket_category_id', '') or '').strip()
         category = interaction.client.get_channel(int(category_id)) if category_id else None
         if not category or not isinstance(category, discord.CategoryChannel):
-            await interaction.followup.send("문의 카테고리가 설정되지 않았습니다. 관리자에게 문의해 주세요.", ephemeral=True)
+            await self._safe_followup(interaction, "문의 카테고리가 설정되지 않았습니다. 관리자에게 문의해 주세요.")
             return
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -3796,14 +3816,19 @@ class InquiryModal(discord.ui.Modal, title="문의 접수"):
             pass
         try:
             ch = await category.create_text_channel(name=f"문의-{interaction.user.name}"[:90], overwrites=overwrites)
-            e = discord.Embed(title="문의 접수", description=self.reason.value[:1000], color=brand_color('info'))
-            e.add_field(name="작성자", value=interaction.user.mention, inline=True)
-            e.set_footer(text=brand_tag('INQUIRY'))
-            await ch.send(content=interaction.user.mention, embed=e)
-            await interaction.followup.send(f"문의가 접수되었습니다: {ch.mention}", ephemeral=True)
         except Exception as ex:
             logger.error(f"[INQUIRY] 티켓 생성 실패: {ex}")
-            await interaction.followup.send(f"문의 접수에 실패했습니다: {ex}", ephemeral=True)
+            await self._safe_followup(interaction, "문의 접수에 실패했습니다. 잠시 후 다시 시도해주세요.")
+            return
+
+        e = discord.Embed(title="문의 접수", description=self.reason.value[:1000], color=brand_color('info'))
+        e.add_field(name="작성자", value=interaction.user.mention, inline=True)
+        e.set_footer(text=brand_tag('INQUIRY'))
+        try:
+            await ch.send(content=interaction.user.mention, embed=e)
+        except Exception as ex:
+            logger.warning(f"[INQUIRY] 티켓 알림 실패: {ex}")
+        await self._safe_followup(interaction, f"문의가 접수되었습니다: {ch.mention}")
 
 
 class InquiryOpenButton(discord.ui.Button):
