@@ -1564,6 +1564,14 @@ class VendingBot(commands.Bot):
             embed.add_field(name="주문", value=f"#{order_id}", inline=True)
             embed.set_footer(text=brand_tag('REVIEW · 리뷰 채널에 자동 등록'))
 
+            # 1순위: 버튼이 컨테이너 안에 들어간 형태
+            try:
+                await user.send(view=ReviewRequestPanel(order_id, product_name, reward))
+                return True
+            except Exception as e:
+                logger.warning(f"[REVIEW] 컨테이너 전송 실패 → 임베드 폴백: {e}")
+
+            # 2순위: 임베드 + 버튼
             await user.send(embed=embed, view=ReviewRequestView(order_id, product_name))
             return True
         except Exception as e:
@@ -3020,8 +3028,26 @@ class CloseTicketButton(discord.ui.Button):
             pass
 
 
+class ReviewRequestPanel(ui.LayoutView):
+    """후기 요청 DM — 버튼이 컨테이너 안에 포함된 형태"""
+
+    def __init__(self, order_id, product_name, reward=0):
+        super().__init__(timeout=None)
+        children = [
+            ui.TextDisplay(f"# 🍪 후기 작성\n**{product_name}** 은 어떠셨나요?"),
+            ui.Separator(),
+        ]
+        if reward > 0:
+            children.append(ui.TextDisplay(f"## 💰 후기를 남기면 **{reward:,}P** 지급"))
+        else:
+            children.append(ui.TextDisplay("후기를 남겨주시면 큰 도움이 됩니다."))
+        children.append(ui.TextDisplay(f"주문 `#{order_id}`\n-# 리뷰 채널에 자동 등록됩니다."))
+        children.append(ui.ActionRow(ReviewButton(order_id, product_name)))
+        self.add_item(ui.Container(*children, accent_color=brand_color('main')))
+
+
 class ReviewRequestView(discord.ui.View):
-    """후기 작성 버튼 (DM · 임베드와 함께 전송)"""
+    """후기 작성 버튼 (임베드 폴백용)"""
 
     def __init__(self, order_id, product_name):
         super().__init__(timeout=None)
