@@ -1547,12 +1547,24 @@ class VendingBot(commands.Bot):
             return False
     
     async def request_review_dm(self, user_id, order_id, product_name):
-        """구매 후 후기 요청 DM 전송 (임베드 + 후기 작성 버튼)"""
+        """구매 후 후기 요청 DM (임베드 + 후기 작성 버튼)"""
         try:
             user = await self.fetch_user(int(user_id))
-            
-            view = ReviewRequestView(order_id, product_name)
-            await user.send(view=view)
+            try:
+                reward = int(str(db.get_setting('review_reward_points', '0') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                reward = 0
+
+            embed = discord.Embed(
+                title="🍪 후기 작성",
+                description=f"**{product_name}** 은 어떠셨나요?",
+                color=brand_color('main'))
+            if reward > 0:
+                embed.description += f"\n\n💰 **후기를 남기면 {reward:,}P 지급**"
+            embed.add_field(name="주문", value=f"#{order_id}", inline=True)
+            embed.set_footer(text=brand_tag('REVIEW · 리뷰 채널에 자동 등록'))
+
+            await user.send(embed=embed, view=ReviewRequestView(order_id, product_name))
             return True
         except Exception as e:
             logger.error(f"Review request DM error: {e}")
@@ -3008,31 +3020,12 @@ class CloseTicketButton(discord.ui.Button):
             pass
 
 
-class ReviewRequestView(ui.LayoutView):
-    """후기 작성 버튼 (DM · 컨테이너 안에 버튼 포함)"""
+class ReviewRequestView(discord.ui.View):
+    """후기 작성 버튼 (DM · 임베드와 함께 전송)"""
 
     def __init__(self, order_id, product_name):
         super().__init__(timeout=None)
-        try:
-            reward = int(str(db.get_setting('review_reward_points', '0') or '0').strip() or 0)
-        except (TypeError, ValueError):
-            reward = 0
-
-        children = [
-            ui.TextDisplay(f"# 후기 작성\n**{product_name}** 은 어떠셨나요?"),
-            ui.Separator(),
-        ]
-        if reward > 0:
-            children.append(ui.TextDisplay(
-                f"## 💰 후기를 남기면 **{reward:,}P** 지급\n"
-                f"아래 **후기 작성** 버튼을 눌러 별점과 후기를 남겨주세요."))
-        else:
-            children.append(ui.TextDisplay(
-                "아래 **후기 작성** 버튼을 눌러 별점과 후기를 남겨주세요."))
-        children.append(ui.TextDisplay(
-            f"주문 `#{order_id}`\n-# 작성하신 후기는 리뷰 채널에 자동 등록됩니다."))
-        children.append(ui.ActionRow(ReviewButton(order_id, product_name)))
-        self.add_item(ui.Container(*children, accent_color=brand_color('main')))
+        self.add_item(ReviewButton(order_id, product_name))
 
 
 class ChargeApproveView(discord.ui.View):
