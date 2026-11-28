@@ -21,7 +21,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file, abort
 from functools import wraps
 import requests
 
@@ -138,7 +138,32 @@ def _fire_stock_notice(product, count):
 
 # Create Flask app
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'apex-vending-secret-key-change-me')
+import security as _sec
+from datetime import timedelta as _timedelta
+
+app.secret_key = _sec.get_secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=True,
+    PERMANENT_SESSION_LIFETIME=_timedelta(hours=8),
+    MAX_CONTENT_LENGTH=32 * 1024 * 1024,
+    TRAP_HTTP_EXCEPTIONS=False,
+)
+_sec.add_security_headers(app)
+
+# 관리자 패널 비밀 경로 (예: /console-3f9a1c2b) — 주소를 모르면 접근 불가
+ADMIN_PATH = _sec.ensure_admin_path()
+logger.info(f"[SECURITY] 관리자 패널 경로: /{ADMIN_PATH}")
+
+
+@app.before_request
+def _security_guard():
+    """POST/PUT/DELETE 교차 출처 차단 (CSRF 완화)"""
+    if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+        if not _sec.same_origin(request):
+            logger.warning(f"[SECURITY] 교차 출처 요청 차단: {request.method} {request.path}")
+            abort(403)
 
 # 구매 후 웹 전달 페이지 (/p/<token>) — PIN 보호 + 복사 버튼
 try:
@@ -503,26 +528,48 @@ def login_required(f):
 
 @app.route('/')
 def index():
-    if session.get('admin_logged_in'):
-        return redirect(url_for('dashboard'))
-    return redirect(url_for('login'))
+    abort(404)
 
-@app.route('/login', methods=['GET', 'POST'])
+
+@app.route('/dashboard')
+@app.route('/login')
+@app.route('/logout')
+def _hidden_admin_routes():
+    """기존 경로는 숨김 (404) — 실제 패널은 비밀 경로에서만"""
+    abort(404)
+
+
+@app.route(f'/{ADMIN_PATH}/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
+        ip = (request.headers.get('X-Forwarded-For', request.remote_addr) or '').split(',')[0].strip()
+        if _sec.login_limiter.blocked(ip):
+            return render_template('login.html', error='시도 횟수를 초과했습니다. 15분 후 다시 시도해주세요.')
+
         password = request.form.get('password', '')
-        admin_password = db.get_setting('admin_password', 'zizer731!!')
-        if password == admin_password:
-            # 영구 세션으로 설정 - 로그아웃하지 않는 이상 로그인 유지
+        stored = db.get_setting('admin_password', '') or ''
+
+        if _sec.verify_password(stored, password):
+            _sec.login_limiter.reset(ip)
+            session.clear()                     # 세션 고정(fixation) 방지
             session.permanent = True
             session['admin_logged_in'] = True
+            # 평문으로 저장돼 있으면 즉시 해시로 교체
+            if not _sec.is_hashed(stored):
+                db.set_setting('admin_password', _sec.hash_password(password))
+                logger.info("[SECURITY] 관리자 비밀번호를 해시로 전환했습니다.")
             return redirect(url_for('dashboard'))
-        return render_template('login.html', error='비밀번호가 올바르지 않습니다.')
+
+        _sec.login_limiter.hit(ip)
+        left = _sec.login_limiter.remaining(ip)
+        return render_template('login.html',
+                               error=f'비밀번호가 올바르지 않습니다. (남은 시도 {left}회)')
     return render_template('login.html')
 
-@app.route('/logout')
+
+@app.route(f'/{ADMIN_PATH}/logout')
 def logout():
-    session.pop('admin_logged_in', None)
+    session.clear()
     return redirect(url_for('login'))
 
 @app.route('/ping')
@@ -531,7 +578,7 @@ def ping():
 
 # ============ DASHBOARD ============
 
-@app.route('/dashboard')
+@app.route(f'/{ADMIN_PATH}')
 @login_required
 def dashboard():
     stats = db.get_order_stats()
@@ -1395,7 +1442,7 @@ def api_stock_request_done(rid):
 @login_required
 def dashboard_stock_request_done(rid):
     db.mark_stock_request_done(rid, handled_by='dashboard')
-    return redirect('/dashboard')
+    return redirect(url_for('dashboard'))
 
 
 @app.route('/dashboard/tiers', methods=['POST'])
@@ -1417,7 +1464,7 @@ def dashboard_tiers():
                    'true' if request.form.get('stock_notice_mention_role') else 'false')
     db.set_setting('charge_log_enabled',
                    'true' if request.form.get('charge_log_enabled') else 'false')
-    return redirect('/dashboard')
+    return redirect(url_for('dashboard'))
 
 
 @app.route('/dashboard/partner-hide/add', methods=['POST'])
@@ -1426,13 +1473,13 @@ def dashboard_partner_hide_add():
     """파트너 숨김 채널 추가"""
     cid = (request.form.get('channel_id') or '').strip()
     if not cid.isdigit():
-        return redirect('/dashboard')
+        return redirect(url_for('dashboard'))
     raw = str(db.get_setting('partner_hide_channel_ids', '') or '')
     ids = [t for t in raw.replace('\n', ' ').replace(',', ' ').replace(';', ' ').split() if t.isdigit()]
     if cid not in ids:
         ids.append(cid)
         db.set_setting('partner_hide_channel_ids', ' '.join(ids))
-    return redirect('/dashboard')
+    return redirect(url_for('dashboard'))
 
 
 @app.route('/dashboard/partner-hide/remove', methods=['POST'])
@@ -1444,7 +1491,7 @@ def dashboard_partner_hide_remove():
     ids = [t for t in raw.replace('\n', ' ').replace(',', ' ').replace(';', ' ').split()
            if t.isdigit() and t != cid]
     db.set_setting('partner_hide_channel_ids', ' '.join(ids))
-    return redirect('/dashboard')
+    return redirect(url_for('dashboard'))
 
 
 @app.route('/dashboard/partner-hide/apply', methods=['POST'])
@@ -1458,7 +1505,7 @@ def dashboard_partner_hide_apply():
                 asyncio.run_coroutine_threadsafe(bot.ensure_partner_roles(guild), loop)
     except Exception as e:
         logger.warning(f"[PARTNER] 대시보드 재적용 실패: {e}")
-    return redirect('/dashboard')
+    return redirect(url_for('dashboard'))
 
 
 @app.route('/api/stock-notice/test', methods=['POST'])

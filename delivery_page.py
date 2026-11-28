@@ -10,6 +10,7 @@ import re
 from flask import abort, render_template_string, request, send_file, session
 
 import database as db
+import security
 
 CSS = """
 :root{--bg:#06080d;--card:#0f1621;--card2:#0b1119;--line:#1d2a3a;--txt:#eef4fb;--sub:#8ea1b8;
@@ -242,13 +243,23 @@ def register(app):
         unlocked = session.get('dl_' + token) is True
         err, shake = None, False
         if request.method == 'POST':
-            pin = (request.form.get('pin') or '').strip()
-            if pin and pin == str(d.get('pin')):
-                session['dl_' + token] = True
-                unlocked = True
-            else:
-                err = 'PIN이 올바르지 않습니다. 다시 확인해주세요.'
+            ip = (request.headers.get('X-Forwarded-For', request.remote_addr) or '').split(',')[0].strip()
+            rl_key = f'{token}:{ip}'
+            if security.pin_limiter.blocked(rl_key):
+                err = '시도 횟수를 초과했습니다. 10분 후 다시 시도해주세요.'
                 shake = True
+            else:
+                pin = (request.form.get('pin') or '').strip()
+                if pin and pin == str(d.get('pin')):
+                    security.pin_limiter.reset(rl_key)
+                    session.clear()                # 세션 고정 방지
+                    session['dl_' + token] = True
+                    unlocked = True
+                else:
+                    security.pin_limiter.hit(rl_key)
+                    left = security.pin_limiter.remaining(rl_key)
+                    err = f'PIN이 올바르지 않습니다. (남은 시도 {left}회)'
+                    shake = True
 
         info, cookie = split_delivery(d.get('content') or '')
         return render_template_string(
