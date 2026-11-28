@@ -272,7 +272,8 @@ def register(app):
     @app.route('/p/<token>/file')
     def apex_delivery_file(token):
         if not session.get('dl_' + token):
-            abort(403)
+            from flask import redirect
+            return redirect(f'/p/{token}')
         got = db.get_delivery_file(token)
         if not got:
             abort(404)

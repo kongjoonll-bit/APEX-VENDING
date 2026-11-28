@@ -128,19 +128,35 @@ def add_security_headers(app):
 
 
 def same_origin(request) -> bool:
-    """POST 요청이 같은 출처에서 온 것인지 확인 (CSRF 완화)"""
+    """POST 요청 출처 검증 (프록시 환경 Host 불일치 허용)"""
+    import os
+    from urllib.parse import urlparse
+
     origin = (request.headers.get('Origin') or '').strip()
     referer = (request.headers.get('Referer') or '').strip()
     target = origin or referer
     if not target:
-        # Origin/Referer 없는 요청(스크립트/웹훅)은 통과시키되, 웹훅은 별도 키 검증
+        return True  # Origin/Referer 없는 요청은 통과(웹훅은 키로 별도 검증)
+
+    netloc = urlparse(target).netloc.lower()
+    if not netloc:
         return True
-    host = (request.host or '').lower()
+
+    if netloc == (request.host or '').lower():
+        return True
+
+    allowed = set()
     try:
-        from urllib.parse import urlparse
-        return urlparse(target).netloc.lower() == host
+        base = (db.get_setting('dashboard_url', '') or '').strip()
+        if base:
+            allowed.add(urlparse(base).netloc.lower())
     except Exception:
-        return False
+        pass
+    env_host = (os.environ.get('RENDER_EXTERNAL_HOSTNAME') or '').strip().lower()
+    if env_host:
+        allowed.add(env_host)
+
+    return netloc in allowed
 
 
 def mask(value: str, keep: int = 4) -> str:

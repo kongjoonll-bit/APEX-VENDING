@@ -162,8 +162,30 @@ def _security_guard():
     """POST/PUT/DELETE 교차 출처 차단 (CSRF 완화)"""
     if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
         if not _sec.same_origin(request):
-            logger.warning(f"[SECURITY] 교차 출처 요청 차단: {request.method} {request.path}")
+            logger.warning(
+                "[SECURITY] 교차 출처 요청 차단: %s %s | Origin=%s | Host=%s",
+                request.method, request.path,
+                request.headers.get('Origin') or request.headers.get('Referer'),
+                request.host)
             abort(403)
+
+
+@app.errorhandler(403)
+def _forbidden(e):
+    return ("<!doctype html><meta charset='utf-8'><title>403</title>"
+            "<body style='background:#0b0f14;color:#eef3f9;font-family:sans-serif;"
+            "display:grid;place-items:center;height:100vh;margin:0'>"
+            "<div style='text-align:center'><h1 style='font-size:44px;margin:0'>403</h1>"
+            "<p style='color:#8ea1b8'>접근이 거부되었습니다.</p></div></body>"), 403
+
+
+@app.errorhandler(404)
+def _not_found(e):
+    return ("<!doctype html><meta charset='utf-8'><title>404</title>"
+            "<body style='background:#0b0f14;color:#eef3f9;font-family:sans-serif;"
+            "display:grid;place-items:center;height:100vh;margin:0'>"
+            "<div style='text-align:center'><h1 style='font-size:44px;margin:0'>404</h1>"
+            "<p style='color:#8ea1b8'>페이지를 찾을 수 없습니다.</p></div></body>"), 404
 
 # 구매 후 웹 전달 페이지 (/p/<token>) — PIN 보호 + 복사 버튼
 try:
