@@ -145,7 +145,7 @@ TEMPLATE = """<!doctype html><html lang="ko"><head>
     <div class="btns">
       <a class="btn gold" href="https://addons.mozilla.org/ko/firefox/addon/cookie-editor/" target="_blank" rel="noopener">🧩 Cookies Editor 다운로드</a>
     </div>
-    <a class="vid" href="https://drive.google.com/file/d/1EgiZm7SIpsimsdFaxfWnc1vKyG6vlKuS/view?usp=drivesdk" target="_blank" rel="noopener">
+    <a class="vid" href="https://drive.google.com/file/d/1FSuArcU8a4lIgym0cpvsPFVkYc-nI4Go/view?usp=sharing" target="_blank" rel="noopener">
       <span class="play">▶</span>
       <span><span class="vt">모바일 예시 영상 보기</span><span class="vs">Google Drive · 클릭하면 재생됩니다</span></span>
     </a>

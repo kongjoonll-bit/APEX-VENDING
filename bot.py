@@ -3013,12 +3013,25 @@ class ReviewRequestView(ui.LayoutView):
 
     def __init__(self, order_id, product_name):
         super().__init__(timeout=None)
+        try:
+            reward = int(str(db.get_setting('review_reward_points', '0') or '0').strip() or 0)
+        except (TypeError, ValueError):
+            reward = 0
+
         children = [
             ui.TextDisplay(f"# 후기 작성\n**{product_name}** 은 어떠셨나요?"),
             ui.Separator(),
-            ui.TextDisplay(f"주문 `#{order_id}`\n-# 작성하신 후기는 리뷰 채널에 자동 등록됩니다."),
-            ui.ActionRow(ReviewButton(order_id, product_name)),
         ]
+        if reward > 0:
+            children.append(ui.TextDisplay(
+                f"## 💰 후기를 남기면 **{reward:,}P** 지급\n"
+                f"아래 **후기 작성** 버튼을 눌러 별점과 후기를 남겨주세요."))
+        else:
+            children.append(ui.TextDisplay(
+                "아래 **후기 작성** 버튼을 눌러 별점과 후기를 남겨주세요."))
+        children.append(ui.TextDisplay(
+            f"주문 `#{order_id}`\n-# 작성하신 후기는 리뷰 채널에 자동 등록됩니다."))
+        children.append(ui.ActionRow(ReviewButton(order_id, product_name)))
         self.add_item(ui.Container(*children, accent_color=brand_color('main')))
 
 
